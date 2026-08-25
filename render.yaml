@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: stech-product-intelligence-web
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: STECH_HEADLESS
+        value: "true"
+      - key: STECH_RUNTIME_DIR
+        value: /tmp/stech-product-intelligence
+      - key: ARTIFACT_TTL_MINUTES
+        value: "20"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: MALLOC_ARENA_MAX
+        value: "2"

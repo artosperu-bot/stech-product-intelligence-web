@@ -1,0 +1,17 @@
+STECH Product Intelligence Web V1 — verificación local
+Fecha: 2026-08-25
+
+- Backend tests: 20/20 PASS
+- Python compileall: PASS
+- Frontend JSX/JS syntax (TypeScript parser): PASS
+- API routes principales: PASS
+- BORRAR.xlsx real: falabella / 32 campos investigables / PASS
+- V30 legacy core: 26 archivos Python comparados / 0 diferencias SHA-256
+- Cloud Run deploy contract: PASS
+- deploy-cloud-run.sh syntax: PASS
+
+Nota:
+El entorno de construcción de esta sesión no tuvo acceso funcional al registro npm,
+por lo que no se pudo ejecutar el npm install + vite build completo aquí.
+Los archivos JSX/JS sí fueron parseados sintácticamente y las versiones del package.json
+quedan fijadas; el Dockerfile realiza npm install y npm run build durante Cloud Build.

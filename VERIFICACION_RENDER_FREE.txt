@@ -1,0 +1,22 @@
+STECH Product Intelligence Web V1 - Render Free
+Fecha de verificacion: 2026-08-25
+
+Verificado:
+- pytest backend/tests: 24 passed
+- Python compileall: OK
+- render.yaml parse YAML: OK
+- plan: free / runtime: docker / region: oregon: OK
+- healthCheckPath: /api/health: OK
+- autoDeployTrigger: commit: OK
+- Chromium low-memory flags: OK
+- legacy_core vs Web V1 Cloud Run original: 26 archivos / 0 diferencias
+
+Limitacion del entorno de construccion:
+- npm install no pudo completarse en este entorno por falta de acceso util al registry durante la verificacion.
+- npm run build por tanto no pudo ejecutarse aqui.
+- Render realizara npm install + npm run build dentro del Docker build.
+- Si el primer build falla, copiar Build Log antes de modificar codigo.
+
+Riesgo que la prueba real debe resolver:
+- Render Free tiene recursos limitados; Chromium/Playwright puede superar la RAM disponible durante investigaciones pesadas.
+- La app ya usa un unico proceso y flags de Chromium de bajo consumo.
