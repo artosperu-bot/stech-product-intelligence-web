@@ -17,11 +17,9 @@ WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
-COPY legacy_core_bundle/ /tmp/legacy_core_bundle/
-# part-11 already contains the final tail of the archive; part-12 is intentionally not consumed.
-RUN cat /tmp/legacy_core_bundle/part-0?.b64 /tmp/legacy_core_bundle/part-10.b64 /tmp/legacy_core_bundle/part-11.b64 | base64 -d > /tmp/legacy_core.tar.gz && \
-    tar -xzf /tmp/legacy_core.tar.gz -C /app && \
-    rm -rf /tmp/legacy_core_bundle /tmp/legacy_core.tar.gz
+COPY legacy_core.tar.gz /tmp/legacy_core.tar.gz
+RUN tar -xzf /tmp/legacy_core.tar.gz -C /app && \
+    rm -f /tmp/legacy_core.tar.gz
 COPY --from=frontend-build /web/dist ./backend/static
 EXPOSE 8080
 CMD ["sh", "-c", "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
