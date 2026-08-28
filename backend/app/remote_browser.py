@@ -6,6 +6,7 @@ from typing import Any
 
 from .remote_protocol import encode_remote_value
 from .research_broker import BROKER
+from .result_sanitizer import sanitize_research_result
 
 
 _COMMON_SCHEMA_RULE = """
@@ -72,6 +73,7 @@ STECH MEDIA DISCOVERY — VIDEOS
 - Confirma el producto/modelo/generación exactos.
 - Prioriza video oficial del producto, tutorial/campaña/canal oficial; después distribuidor, retailer, review y comparación relevante.
 - Rechaza coincidencias solo por familia/marca, generación diferente, duplicados y contenido irrelevante.
+- Devuelve TODAS las URLs como texto absoluto limpio https://...; nunca uses sintaxis Markdown [url](url).
 """.strip()
 
 
@@ -165,6 +167,7 @@ class RemoteChatGPTBrowserSession:
         wire_args = encode_remote_value(augmented_args)
         wire_kwargs = encode_remote_value(dict(kwargs))
         result = await BROKER.submit(wire_args, wire_kwargs, timeout_seconds=timeout)
+        result = sanitize_research_result(result)
         self._remember(result)
         self._note("Respuesta de ChatGPT recibida desde el worker Windows.")
         return result
