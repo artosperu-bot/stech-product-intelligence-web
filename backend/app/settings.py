@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 
 APP_NAME = 'STECH Product Intelligence Web'
-APP_VERSION = 'web-v1'
+APP_VERSION = 'web-v7-worker'
 WORKFLOWS = ['characteristics', 'prices', 'images', 'videos']
 BASE_DIR = Path(__file__).resolve().parents[1]
 STATIC_DIR = BASE_DIR / 'static'
