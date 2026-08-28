@@ -5,6 +5,7 @@ import os
 import uuid
 from typing import Any
 
+from .peru_price_sources import peru_price_seed_guidance
 from .remote_protocol import encode_remote_value
 from .research_broker import BROKER
 from .research_prompts import guidance_for
@@ -39,7 +40,10 @@ class RemoteChatGPTBrowserSession:
 
     def _guidance(self) -> str:
         turn = len(self._research_responses) + 1
-        return guidance_for(self.research_kind, turn)
+        base = guidance_for(self.research_kind, turn)
+        if self.research_kind == "prices":
+            return f"{base}\n\n{peru_price_seed_guidance()}"
+        return base
 
     def _state_block(self) -> str:
         if not self._research_responses:
