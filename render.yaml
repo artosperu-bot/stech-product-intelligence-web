@@ -9,7 +9,11 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: STECH_HEADLESS
-        value: "false"
+        value: "true"
+      - key: STECH_CHATGPT_MODE
+        value: "remote"
+      - key: STECH_RESEARCH_WORKER_TASK_TIMEOUT
+        value: "360"
       - key: STECH_RUNTIME_DIR
         value: /tmp/stech-product-intelligence
       - key: ARTIFACT_TTL_MINUTES
