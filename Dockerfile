@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     STECH_HEADLESS=true \
     STECH_CHATGPT_MODE=remote \
-    STECH_RESEARCH_WORKER_TASK_TIMEOUT=360 \
+    STECH_RESEARCH_WORKER_TASK_TIMEOUT=720 \
     STECH_RUNTIME_DIR=/tmp/stech-product-intelligence
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
