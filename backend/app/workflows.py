@@ -4,7 +4,7 @@ from pathlib import Path
 import shutil
 import zipfile
 
-from .cloud_browser import CloudChatGPTBrowserSession
+from .browser_selector import chatgpt_session
 from .serializers import serialize_preview_row, serialize_price_offer, serialize_image_record, serialize_video_record
 from .v30_bridge import CORE_DIR  # noqa: F401
 
@@ -26,7 +26,6 @@ def inspect_template(path: Path, identifier: str) -> dict:
         'researchable_count': prep.researchable_count,
         'fields': [field.original_name for field in prep.schema.research_fields],
     }
-
 
 
 
@@ -66,8 +65,8 @@ async def run_characteristics(job, identifier: str, template_path: Path, emit):
     def progress(message: str):
         pct, step, label = _stage_for_message('characteristics', message)
         emit(pct, step, message, label)
-    emit(20, '2/7', 'Iniciando Chromium de servidor', 'NAVEGADOR')
-    async with CloudChatGPTBrowserSession(progress=progress) as session:
+    emit(20, '2/7', 'Iniciando sesión de investigación ChatGPT', 'NAVEGADOR')
+    async with chatgpt_session(progress=progress) as session:
         result = await run_research_for_preview_once(
             prep, session.ask, min_confidence=80, output_dir=job.directory, progress=progress,
         )
@@ -98,7 +97,7 @@ async def run_prices(job, identifier: str, emit):
     def verifier_update(validation, done, total):
         pct = 74 + int(22 * (done / max(1, total)))
         emit(pct, '6/7', f'Verificando oferta {done}/{total}', 'VERIFICACIÓN')
-    async with CloudChatGPTBrowserSession(progress=progress) as session:
+    async with chatgpt_session(progress=progress) as session:
         run = await run_price_research_v21(
             prep, session.ask, verifier_fn=verify_price_offers_headless,
             min_match_confidence=80, output_dir=job.directory, progress=progress,
@@ -121,7 +120,7 @@ async def run_images(job, identifier: str, emit):
     def image_ready(record, done, total):
         pct = 40 + int(55 * (done / max(1, total)))
         emit(pct, '4/5', f'Imagen {done}/{total}: {record.source_name or record.source_type}', 'VALIDACIÓN')
-    async with CloudChatGPTBrowserSession(progress=progress) as session:
+    async with chatgpt_session(progress=progress) as session:
         run = await run_image_research(prep, session.ask, progress=progress, discovery_ready=discovery_ready, image_ready=image_ready)
     job.payload = {'run': run}
     product = run.discovery.product or {}
@@ -140,7 +139,7 @@ async def run_videos(job, identifier: str, emit):
     def video_ready(record, done, total):
         pct = 40 + int(55 * (done / max(1, total)))
         emit(pct, '4/5', f'Video {done}/{total}: {record.title or record.source_name}', 'VALIDACIÓN')
-    async with CloudChatGPTBrowserSession(progress=progress) as session:
+    async with chatgpt_session(progress=progress) as session:
         run = await run_video_research(prep, session.ask, progress=progress, discovery_ready=discovery_ready, video_ready=video_ready)
     job.payload = {'run': run}
     product = run.discovery.product or {}
