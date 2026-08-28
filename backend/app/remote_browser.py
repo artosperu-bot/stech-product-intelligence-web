@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from .remote_protocol import encode_remote_value
 from .research_broker import BROKER
 
 
@@ -30,6 +31,8 @@ class RemoteChatGPTBrowserSession:
     async def ask(self, *args, **kwargs):
         timeout = float(os.getenv("STECH_RESEARCH_WORKER_TASK_TIMEOUT", "360"))
         self._note("Enviando consulta de ChatGPT al Chrome real del worker...")
-        result = await BROKER.submit(list(args), dict(kwargs), timeout_seconds=timeout)
+        wire_args = encode_remote_value(list(args))
+        wire_kwargs = encode_remote_value(dict(kwargs))
+        result = await BROKER.submit(wire_args, wire_kwargs, timeout_seconds=timeout)
         self._note("Respuesta de ChatGPT recibida desde el worker Windows.")
         return result
