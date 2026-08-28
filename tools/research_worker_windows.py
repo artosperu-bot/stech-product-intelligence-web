@@ -18,8 +18,14 @@ import httpx
 from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND_DIR = ROOT / "backend"
 CORE_DIR = ROOT / "backend" / "legacy_core"
 BUNDLE_DIR = ROOT / "legacy_core_bundle_v2"
+
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from app.remote_protocol import decode_remote_value
 
 
 def ensure_legacy_core() -> None:
@@ -122,6 +128,25 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
     def progress(message: str):
         print(f"[CHATGPT] {message}", flush=True)
 
+    def callback_factory(name: str, is_async: bool):
+        def render_message(args, kwargs):
+            pieces = [str(value) for value in args if value is not None]
+            if kwargs:
+                pieces.append(json.dumps(json_safe(kwargs), ensure_ascii=False))
+            detail = " ".join(piece for piece in pieces if piece).strip()
+            return f"{name}: {detail}" if detail else name
+
+        if is_async:
+            async def async_callback(*args, **kwargs):
+                progress(render_message(args, kwargs))
+                return None
+            return async_callback
+
+        def sync_callback(*args, **kwargs):
+            progress(render_message(args, kwargs))
+            return None
+        return sync_callback
+
     session = SessionClass(progress=progress)
     session._cdp_url = cdp_url
 
@@ -144,8 +169,8 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
                     response.raise_for_status()
                     task = response.json()
                     task_id = task["task_id"]
-                    args = task.get("args") or []
-                    kwargs = task.get("kwargs") or {}
+                    args = decode_remote_value(task.get("args") or [], callback_factory)
+                    kwargs = decode_remote_value(task.get("kwargs") or {}, callback_factory)
                     print(f"[WORKER] trabajo {task_id[:8]} recibido | args={len(args)}")
                     try:
                         result = await session.ask(*args, **kwargs)
