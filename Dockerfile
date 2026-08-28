@@ -11,7 +11,7 @@ RUN npm run build
 FROM mcr.microsoft.com/playwright/python:v1.55.0-noble
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    STECH_HEADLESS=true \
+    STECH_HEADLESS=false \
     STECH_RUNTIME_DIR=/tmp/stech-product-intelligence
 WORKDIR /app
 COPY backend/requirements.txt ./requirements.txt
@@ -26,4 +26,4 @@ RUN cat /tmp/legacy_core_bundle/part-*.b64 | base64 -d > /tmp/legacy_core.tar.gz
     rm -rf /tmp/legacy_core_bundle /tmp/legacy_core.tar.gz
 COPY --from=frontend-build /web/dist ./backend/static
 EXPOSE 8080
-CMD ["sh", "-c", "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
+CMD ["sh", "-c", "xvfb-run -a uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port ${PORT:-8080} --workers 1"]
