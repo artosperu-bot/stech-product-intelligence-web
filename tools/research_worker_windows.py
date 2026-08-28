@@ -118,6 +118,36 @@ async def recover_chatgpt_page(session):
     return page
 
 
+async def open_fresh_chat(session):
+    """Start every research turn at ChatGPT root so no prior conversation history leaks into it."""
+    page = await recover_chatgpt_page(session)
+    try:
+        await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+    except Exception:
+        # The target may have died between recovery and navigation. Re-resolve once from Chrome.
+        session.page = None
+        page = await recover_chatgpt_page(session)
+        await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+    session.page = page
+    session._note("Nuevo chat de ChatGPT listo para esta investigación.")
+    return page
+
+
+async def ask_with_fresh_chat_retry(session, args, kwargs, max_attempts: int = 2):
+    attempts = max(1, int(max_attempts))
+    for attempt in range(1, attempts + 1):
+        await open_fresh_chat(session)
+        try:
+            return await session.ask(*args, **kwargs)
+        except Exception as exc:
+            if attempt >= attempts:
+                raise
+            session._note(
+                f"La consulta de ChatGPT falló ({type(exc).__name__}); reintentando una vez en un chat nuevo..."
+            )
+    raise RuntimeError("CHATGPT_RETRY_UNREACHABLE")
+
+
 async def load_session_class():
     ensure_legacy_core()
     if str(CORE_DIR) not in sys.path:
@@ -201,8 +231,7 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
                     kwargs = decode_remote_value(task.get("kwargs") or {}, callback_factory)
                     print(f"[WORKER] trabajo {task_id[:8]} recibido | args={len(args)}")
                     try:
-                        await recover_chatgpt_page(session)
-                        result = await session.ask(*args, **kwargs)
+                        result = await ask_with_fresh_chat_retry(session, args, kwargs, max_attempts=2)
                         done = await client.post(
                             f"{server}/api/research-worker/tasks/{task_id}/complete",
                             json={"worker_id": worker_id, "result": json_safe(result)},
