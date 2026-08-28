@@ -26,6 +26,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.remote_protocol import decode_remote_value
+from app.worker_chat_policy import WorkerChatRouter, composer_has_unsent_prompt, pop_remote_context
 
 
 def ensure_legacy_core() -> None:
@@ -119,32 +120,80 @@ async def recover_chatgpt_page(session):
 
 
 async def open_fresh_chat(session):
-    """Start every research turn at ChatGPT root so no prior conversation history leaks into it."""
+    """Start a clean ChatGPT conversation for a new research job or a retry."""
     page = await recover_chatgpt_page(session)
     try:
         await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
     except Exception:
-        # The target may have died between recovery and navigation. Re-resolve once from Chrome.
         session.page = None
         page = await recover_chatgpt_page(session)
         await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
     session.page = page
-    session._note("Nuevo chat de ChatGPT listo para esta investigación.")
+    session._note("Nuevo chat de ChatGPT listo para este trabajo de investigación.")
     return page
 
 
-async def ask_with_fresh_chat_retry(session, args, kwargs, max_attempts: int = 2):
+async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: float = 2.5) -> None:
+    """Click Send only when the complete prompt is still sitting unsent in the composer."""
+    try:
+        await asyncio.sleep(max(0.5, float(delay_seconds)))
+        page = await recover_chatgpt_page(session)
+        composer = page.locator("#prompt-textarea")
+        if await composer.count() < 1:
+            return
+        text = await composer.first.inner_text(timeout=3000)
+        if not composer_has_unsent_prompt(expected_prompt, text):
+            return
+
+        send = page.locator('button[data-testid="send-button"]')
+        if await send.count() < 1:
+            send = page.locator('button[aria-label*="Enviar"], button[aria-label*="Send"]')
+        if await send.count() < 1:
+            return
+        button = send.first
+        if await button.is_visible() and await button.is_enabled():
+            session._note("El prompt seguía completo en el compositor; enviándolo automáticamente...")
+            await button.click(timeout=5000)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        return
+
+
+async def ask_in_job_chat_retry(
+    session,
+    args,
+    kwargs,
+    chat_key: str,
+    router: WorkerChatRouter,
+    max_attempts: int = 2,
+):
     attempts = max(1, int(max_attempts))
+    expected_prompt = args[0] if args and isinstance(args[0], str) else ""
+
     for attempt in range(1, attempts + 1):
-        await open_fresh_chat(session)
+        if attempt > 1:
+            router.reset(chat_key)
+        await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
+
+        guard = None
+        if expected_prompt:
+            guard = asyncio.create_task(guard_unsent_prompt(session, expected_prompt))
         try:
-            return await session.ask(*args, **kwargs)
+            result = await session.ask(*args, **kwargs)
+            router.remember(chat_key, session)
+            return result
         except Exception as exc:
             if attempt >= attempts:
                 raise
             session._note(
                 f"La consulta de ChatGPT falló ({type(exc).__name__}); reintentando una vez en un chat nuevo..."
             )
+        finally:
+            if guard is not None:
+                guard.cancel()
+                await asyncio.gather(guard, return_exceptions=True)
+
     raise RuntimeError("CHATGPT_RETRY_UNREACHABLE")
 
 
@@ -182,6 +231,7 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
     SessionClass = await load_session_class()
     headers = {"Authorization": f"Bearer {token}"}
     server = server.rstrip("/")
+    chat_router = WorkerChatRouter()
 
     def progress(message: str):
         print(f"[CHATGPT] {message}", flush=True)
@@ -229,9 +279,22 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
                     task_id = task["task_id"]
                     args = decode_remote_value(task.get("args") or [], callback_factory)
                     kwargs = decode_remote_value(task.get("kwargs") or {}, callback_factory)
-                    print(f"[WORKER] trabajo {task_id[:8]} recibido | args={len(args)}")
+                    remote_context = pop_remote_context(kwargs)
+                    chat_key = str(remote_context.get("chat_key") or task_id)
+                    research_kind = str(remote_context.get("research_kind") or "research")
+                    turn = int(remote_context.get("turn") or 1)
+                    print(
+                        f"[WORKER] trabajo {task_id[:8]} recibido | {research_kind} | turno={turn} | args={len(args)}"
+                    )
                     try:
-                        result = await ask_with_fresh_chat_retry(session, args, kwargs, max_attempts=2)
+                        result = await ask_in_job_chat_retry(
+                            session,
+                            args,
+                            kwargs,
+                            chat_key=chat_key,
+                            router=chat_router,
+                            max_attempts=2,
+                        )
                         done = await client.post(
                             f"{server}/api/research-worker/tasks/{task_id}/complete",
                             json={"worker_id": worker_id, "result": json_safe(result)},
