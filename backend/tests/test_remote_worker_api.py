@@ -63,6 +63,33 @@ class RemoteBrowserSessionTests(unittest.IsolatedAsyncioTestCase):
         await BROKER.complete(task["task_id"], "RESPUESTA", "pc-callable")
         self.assertEqual(await asking, "RESPUESTA")
 
+    async def test_same_session_keeps_chat_key_and_increments_turn(self):
+        from app.research_broker import BROKER
+        from app.remote_browser import RemoteChatGPTBrowserSession
+        from app.worker_chat_policy import REMOTE_CONTEXT_KWARG
+
+        await BROKER.heartbeat("pc-chat-key")
+        session = RemoteChatGPTBrowserSession(research_kind="prices")
+        await session.__aenter__()
+
+        asking1 = asyncio.create_task(session.ask("PROMPT 1"))
+        await asyncio.sleep(0)
+        task1 = await BROKER.claim("pc-chat-key", wait_seconds=0.1)
+        context1 = task1["kwargs"][REMOTE_CONTEXT_KWARG]
+        self.assertEqual(context1["research_kind"], "prices")
+        self.assertEqual(context1["turn"], 1)
+        await BROKER.complete(task1["task_id"], '{"offers":[]}', "pc-chat-key")
+        await asking1
+
+        asking2 = asyncio.create_task(session.ask("PROMPT 2"))
+        await asyncio.sleep(0)
+        task2 = await BROKER.claim("pc-chat-key", wait_seconds=0.1)
+        context2 = task2["kwargs"][REMOTE_CONTEXT_KWARG]
+        self.assertEqual(context2["chat_key"], context1["chat_key"])
+        self.assertEqual(context2["turn"], 2)
+        await BROKER.complete(task2["task_id"], '{"offers":[]}', "pc-chat-key")
+        await asking2
+
 
 if __name__ == "__main__":
     unittest.main()
