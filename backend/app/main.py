@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from .jobs import JobStore
 from .progress import ProgressEvent, encode_ndjson
 from .settings import APP_NAME, APP_VERSION, WORKFLOWS, STATIC_DIR, RUNTIME_DIR
+from .worker_api import router as worker_router
 from .workflows import (
     inspect_template, run_characteristics, run_prices, run_images, run_videos,
     generate_excel, generate_prices_xlsx, generate_images_zip, generate_videos_zip,
@@ -25,6 +26,7 @@ def health_payload() -> dict:
     return {'ok': True, 'app': APP_NAME, 'version': APP_VERSION, 'workflows': WORKFLOWS}
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
+app.include_router(worker_router)
 
 @app.get('/api/health')
 async def health():
