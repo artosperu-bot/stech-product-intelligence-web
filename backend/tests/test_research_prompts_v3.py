@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from app.peru_price_sources import peru_price_seed_guidance
 from app.research_prompts import guidance_for
 
 
@@ -22,8 +23,8 @@ class ResearchPromptsV3Tests(unittest.TestCase):
         self.assertNotEqual(p1, p2)
         self.assertNotEqual(p2, p3)
 
-    def test_price_prompt_has_broad_peru_seed_matrix_but_is_not_a_whitelist(self):
-        prompt = guidance_for('prices', 1)
+    def test_price_source_matrix_is_broad_and_not_a_whitelist(self):
+        prompt = peru_price_seed_guidance()
         for domain in (
             'mercadolibre.com.pe', 'falabella.com.pe', 'simple.ripley.com.pe',
             'oechsle.pe', 'efe.com.pe', 'lacuracao.pe', 'hiraoka.com.pe',
@@ -33,6 +34,7 @@ class ResearchPromptsV3Tests(unittest.TestCase):
             self.assertIn(domain, prompt)
         self.assertIn('NO es una whitelist', prompt)
         self.assertIn('seller', prompt.casefold())
+        self.assertIn('DESCUBRIMIENTO DINÁMICO', prompt)
 
     def test_video_prompt_is_multisource_and_expansive(self):
         prompt = guidance_for('videos', 1)
