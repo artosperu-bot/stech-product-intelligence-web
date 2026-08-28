@@ -25,6 +25,7 @@ BUNDLE_DIR = ROOT / "legacy_core_bundle_v2"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from app.chatgpt_dom_capture import extract_json_payload
 from app.remote_protocol import decode_remote_value
 from app.worker_chat_policy import WorkerChatRouter, composer_has_unsent_prompt, pop_remote_context
 
@@ -160,6 +161,63 @@ async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: floa
         return
 
 
+async def assistant_message_count(session) -> int:
+    try:
+        page = await recover_chatgpt_page(session)
+        return await page.locator('[data-message-author-role="assistant"]').count()
+    except Exception:
+        return 0
+
+
+async def wait_for_new_assistant_json(
+    session,
+    baseline_count: int,
+    timeout_seconds: float = 240.0,
+    stable_seconds: float = 1.2,
+):
+    """Fallback for multi-turn chats when legacy ask() leaves a finished JSON visible but keeps waiting."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(15.0, float(timeout_seconds))
+    last_payload = None
+    stable_since = None
+
+    while loop.time() < deadline:
+        try:
+            page = await recover_chatgpt_page(session)
+            messages = page.locator('[data-message-author-role="assistant"]')
+            count = await messages.count()
+            if count > baseline_count:
+                text = await messages.nth(count - 1).inner_text(timeout=3000)
+                payload = extract_json_payload(text)
+                if payload:
+                    if payload != last_payload:
+                        last_payload = payload
+                        stable_since = loop.time()
+                    elif stable_since is not None and loop.time() - stable_since >= stable_seconds:
+                        stop = page.locator(
+                            'button[data-testid="stop-button"], '
+                            'button[aria-label*="Detener"], button[aria-label*="Stop"]'
+                        )
+                        stop_visible = False
+                        if await stop.count() > 0:
+                            try:
+                                stop_visible = await stop.first.is_visible()
+                            except Exception:
+                                stop_visible = False
+                        if not stop_visible:
+                            return payload
+                else:
+                    last_payload = None
+                    stable_since = None
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            pass
+        await asyncio.sleep(0.4)
+
+    return None
+
+
 async def ask_in_job_chat_retry(
     session,
     args,
@@ -175,12 +233,30 @@ async def ask_in_job_chat_retry(
         if attempt > 1:
             router.reset(chat_key)
         await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
+        baseline_count = await assistant_message_count(session)
 
         guard = None
         if expected_prompt:
             guard = asyncio.create_task(guard_unsent_prompt(session, expected_prompt))
+        ask_task = asyncio.create_task(session.ask(*args, **kwargs))
+        dom_task = asyncio.create_task(wait_for_new_assistant_json(session, baseline_count))
+
         try:
-            result = await session.ask(*args, **kwargs)
+            done, _ = await asyncio.wait({ask_task, dom_task}, return_when=asyncio.FIRST_COMPLETED)
+            if ask_task in done:
+                result = await ask_task
+            else:
+                dom_result = await dom_task
+                if dom_result is None:
+                    result = await ask_task
+                else:
+                    ask_task.cancel()
+                    await asyncio.gather(ask_task, return_exceptions=True)
+                    session._note(
+                        "JSON final detectado directamente en el DOM; continuando sin esperar al waiter legacy."
+                    )
+                    result = dom_result
+
             router.remember(chat_key, session)
             return result
         except Exception as exc:
@@ -193,6 +269,12 @@ async def ask_in_job_chat_retry(
             if guard is not None:
                 guard.cancel()
                 await asyncio.gather(guard, return_exceptions=True)
+            if not dom_task.done():
+                dom_task.cancel()
+                await asyncio.gather(dom_task, return_exceptions=True)
+            if not ask_task.done():
+                ask_task.cancel()
+                await asyncio.gather(ask_task, return_exceptions=True)
 
     raise RuntimeError("CHATGPT_RETRY_UNREACHABLE")
 
