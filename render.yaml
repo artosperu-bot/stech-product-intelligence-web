@@ -9,7 +9,7 @@ services:
     autoDeployTrigger: commit
     envVars:
       - key: STECH_HEADLESS
-        value: "true"
+        value: "false"
       - key: STECH_RUNTIME_DIR
         value: /tmp/stech-product-intelligence
       - key: ARTIFACT_TTL_MINUTES
