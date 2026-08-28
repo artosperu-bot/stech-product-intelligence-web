@@ -159,7 +159,7 @@ class RemoteChatGPTBrowserSession:
             self._research_responses[-1] = self._research_responses[-1][:max_total] + "…[TRUNCATED]"
 
     async def ask(self, *args, **kwargs):
-        timeout = float(os.getenv("STECH_RESEARCH_WORKER_TASK_TIMEOUT", "360"))
+        timeout = float(os.getenv("STECH_RESEARCH_WORKER_TASK_TIMEOUT", "720"))
         self._note("Enviando consulta de ChatGPT al Chrome real del worker...")
         augmented_args = self._augment_args(args)
         wire_args = encode_remote_value(augmented_args)
