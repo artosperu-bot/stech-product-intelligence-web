@@ -90,6 +90,34 @@ def json_safe(value):
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
+async def recover_chatgpt_page(session):
+    page = getattr(session, "page", None)
+    try:
+        if page is not None and not page.is_closed():
+            return page
+    except Exception:
+        pass
+
+    context = getattr(session, "context", None)
+    if context is None:
+        raise RuntimeError("Chrome conectado pero el worker perdió el contexto de navegador.")
+
+    for candidate in list(context.pages):
+        try:
+            if not candidate.is_closed() and "chatgpt.com" in (candidate.url or ""):
+                session.page = candidate
+                session._note("Pestaña ChatGPT recuperada desde Chrome real.")
+                return candidate
+        except Exception:
+            continue
+
+    page = await context.new_page()
+    await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+    session.page = page
+    session._note("Nueva pestaña ChatGPT creada en Chrome real.")
+    return page
+
+
 async def load_session_class():
     ensure_legacy_core()
     if str(CORE_DIR) not in sys.path:
@@ -173,6 +201,7 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
                     kwargs = decode_remote_value(task.get("kwargs") or {}, callback_factory)
                     print(f"[WORKER] trabajo {task_id[:8]} recibido | args={len(args)}")
                     try:
+                        await recover_chatgpt_page(session)
                         result = await session.ask(*args, **kwargs)
                         done = await client.post(
                             f"{server}/api/research-worker/tasks/{task_id}/complete",
