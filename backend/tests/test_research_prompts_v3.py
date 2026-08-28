@@ -22,6 +22,18 @@ class ResearchPromptsV3Tests(unittest.TestCase):
         self.assertNotEqual(p1, p2)
         self.assertNotEqual(p2, p3)
 
+    def test_price_prompt_has_broad_peru_seed_matrix_but_is_not_a_whitelist(self):
+        prompt = guidance_for('prices', 1)
+        for domain in (
+            'mercadolibre.com.pe', 'falabella.com.pe', 'simple.ripley.com.pe',
+            'oechsle.pe', 'efe.com.pe', 'lacuracao.pe', 'hiraoka.com.pe',
+            'coolbox.pe', 'memorykings.pe', 'impacto.com.pe', 'sercoplus.com',
+            'infotec.com.pe', 'baetech.pe', 'infiniti.com.pe',
+        ):
+            self.assertIn(domain, prompt)
+        self.assertIn('NO es una whitelist', prompt)
+        self.assertIn('seller', prompt.casefold())
+
     def test_video_prompt_is_multisource_and_expansive(self):
         prompt = guidance_for('videos', 1)
         for needle in ('YouTube Shorts', 'TikTok', 'VideoObject', 'embedUrl', 'DEDUPLICACIÓN', 'SATURACIÓN'):
