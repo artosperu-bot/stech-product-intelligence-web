@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -38,6 +39,28 @@ class RemoteBrowserSessionTests(unittest.IsolatedAsyncioTestCase):
         task = await BROKER.claim("pc-test", wait_seconds=0.1)
         self.assertEqual(task["args"], ["PROMPT"])
         await BROKER.complete(task["task_id"], "RESPUESTA", "pc-test")
+        self.assertEqual(await asking, "RESPUESTA")
+
+    async def test_remote_session_encodes_callable_arguments_for_json_transport(self):
+        from app.research_broker import BROKER
+        from app.remote_browser import RemoteChatGPTBrowserSession
+
+        await BROKER.heartbeat("pc-callable")
+        session = RemoteChatGPTBrowserSession()
+        await session.__aenter__()
+
+        def progress(message):
+            return None
+
+        asking = asyncio.create_task(session.ask("PROMPT", progress=progress))
+        await asyncio.sleep(0)
+        task = await BROKER.claim("pc-callable", wait_seconds=0.1)
+        self.assertIsNotNone(task)
+        json.dumps(task)
+        marker = task["kwargs"]["progress"]
+        self.assertEqual(marker["__stech_remote_type__"], "callable")
+        self.assertEqual(marker["name"], "progress")
+        await BROKER.complete(task["task_id"], "RESPUESTA", "pc-callable")
         self.assertEqual(await asking, "RESPUESTA")
 
 
