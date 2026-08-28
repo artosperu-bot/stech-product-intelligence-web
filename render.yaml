@@ -13,7 +13,7 @@ services:
       - key: STECH_CHATGPT_MODE
         value: "remote"
       - key: STECH_RESEARCH_WORKER_TASK_TIMEOUT
-        value: "360"
+        value: "720"
       - key: STECH_RUNTIME_DIR
         value: /tmp/stech-product-intelligence
       - key: ARTIFACT_TTL_MINUTES
