@@ -85,6 +85,16 @@ def _priority_for_header(header: str) -> int:
     return 20
 
 
+def _is_mapped_header(value: Any) -> bool:
+    text = _text(value)
+    if not text:
+        return False
+    if re.search(r'#\s*\d+\b', text):
+        return True
+    normalized = _header_key(text)
+    return any(normalized == needle for needle, _ in _HEADER_PRIORITIES)
+
+
 def _find_header_row(ws) -> tuple[int, dict[int, str]]:
     best_row = 0
     best_headers: dict[int, str] = {}
@@ -97,7 +107,7 @@ def _find_header_row(ws) -> tuple[int, dict[int, str]]:
         score = 0
         for cell in row:
             text = _text(cell.value)
-            if not text:
+            if not text or not _is_mapped_header(text):
                 continue
             priority = _priority_for_header(text)
             if priority > 20:
@@ -116,7 +126,8 @@ def _evidence_candidates(wb) -> list[IdentityCandidate]:
     if 'IA_EVIDENCIA' not in wb.sheetnames:
         return []
     ws = wb['IA_EVIDENCIA']
-    if ws.max_row < 2:
+    max_row = ws.max_row or 0
+    if max_row < 2:
         return []
     headers = {_header_key(cell.value): cell.column for cell in ws[1] if _text(cell.value)}
     pn_col = headers.get('part number') or headers.get('partnumber') or headers.get('mpn')
@@ -126,7 +137,7 @@ def _evidence_candidates(wb) -> list[IdentityCandidate]:
         return []
     result: list[IdentityCandidate] = []
     seen: set[str] = set()
-    for row_idx in range(2, ws.max_row + 1):
+    for row_idx in range(2, max_row + 1):
         value = _text(ws.cell(row_idx, pn_col).value)
         if not value or value in seen:
             continue
@@ -153,8 +164,9 @@ def extract_identity_candidates(path: Path) -> list[IdentityCandidate]:
         header_row, headers = _find_header_row(ws)
         candidates: list[IdentityCandidate] = []
         seen: set[tuple[str, str, int]] = set()
+        max_col = max(headers)
         for row_idx, row in enumerate(
-            ws.iter_rows(min_row=header_row + 1),
+            ws.iter_rows(min_row=header_row + 1, max_col=max_col),
             start=header_row + 1,
         ):
             for column, field_name in headers.items():
@@ -270,7 +282,8 @@ def enrich_identity_from_workbook_evidence(path: Path, identity: CanonicalIdenti
         if 'IA_EVIDENCIA' not in wb.sheetnames:
             return identity
         ws = wb['IA_EVIDENCIA']
-        if ws.max_row < 2:
+        max_row = ws.max_row or 0
+        if max_row < 2:
             return identity
         headers = {_header_key(cell.value): cell.column for cell in ws[1] if _text(cell.value)}
         pn_col = headers.get('part number') or headers.get('partnumber') or headers.get('mpn')
@@ -290,7 +303,7 @@ def enrich_identity_from_workbook_evidence(path: Path, identity: CanonicalIdenti
         sources = list(identity.sources)
         confidence = identity.confidence
 
-        for row_idx in range(2, ws.max_row + 1):
+        for row_idx in range(2, max_row + 1):
             status = _text(ws.cell(row_idx, status_col).value).upper() if status_col else 'CONFIRMED'
             if status not in {'CONFIRMADO', 'CONFIRMED'}:
                 continue
