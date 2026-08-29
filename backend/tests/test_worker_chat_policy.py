@@ -5,6 +5,7 @@ from app.worker_chat_policy import (
     WorkerChatRouter,
     composer_has_unsent_prompt,
     pop_remote_context,
+    prepare_chatgpt_composer,
 )
 
 
@@ -78,6 +79,86 @@ class PromptDispatchTests(unittest.TestCase):
         self.assertTrue(composer_has_unsent_prompt(expected, composer))
         self.assertFalse(composer_has_unsent_prompt(expected, ""))
         self.assertFalse(composer_has_unsent_prompt(expected, "SEGUNDA PASADA"))
+
+
+class _FakeElement:
+    def __init__(self, visible=True, editable=True, trial_error=None):
+        self.visible = visible
+        self.editable = editable
+        self.trial_error = trial_error
+        self.trial_clicks = 0
+
+    async def is_visible(self):
+        return self.visible
+
+    async def is_editable(self):
+        return self.editable
+
+    async def click(self, **kwargs):
+        self.trial_clicks += 1
+        if self.trial_error:
+            raise RuntimeError(self.trial_error)
+
+
+class _FakeLocatorList:
+    def __init__(self, elements, on_evaluate_all=None):
+        self.elements = elements
+        self.on_evaluate_all = on_evaluate_all
+
+    async def count(self):
+        return len(self.elements)
+
+    def nth(self, index):
+        return self.elements[index]
+
+    async def evaluate_all(self, script):
+        if self.on_evaluate_all:
+            self.on_evaluate_all()
+
+
+class _FakeRoleResult:
+    def __init__(self, page):
+        self.page = page
+
+    @property
+    def first(self):
+        return self.page.real if self.page.fallback_hidden else self.page.fallback
+
+
+class _HydratingPage:
+    def __init__(self):
+        self.url = "https://chatgpt.com/"
+        self.real = _FakeElement(visible=True, editable=True)
+        self.fallback = _FakeElement(visible=False, editable=True)
+        self.fallback_hidden = False
+
+    def locator(self, selector):
+        if selector == "#prompt-textarea":
+            return _FakeLocatorList([self.real])
+        return _FakeLocatorList(
+            [self.fallback],
+            on_evaluate_all=lambda: setattr(self, "fallback_hidden", True),
+        )
+
+    def get_by_role(self, role):
+        self.last_role = role
+        return _FakeRoleResult(self)
+
+
+class ComposerReadinessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_hides_fallback_textarea_before_legacy_textbox_lookup(self):
+        page = _HydratingPage()
+
+        composer = await prepare_chatgpt_composer(
+            page,
+            timeout_seconds=0.5,
+            poll_seconds=0.01,
+        )
+
+        self.assertIs(composer, page.real)
+        self.assertTrue(page.fallback_hidden)
+        self.assertEqual(page.last_role, "textbox")
+        self.assertGreaterEqual(page.real.trial_clicks, 2)
 
 
 class RemoteContextTests(unittest.TestCase):
