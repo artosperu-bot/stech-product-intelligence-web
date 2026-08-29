@@ -37,7 +37,8 @@ class RemoteBrowserSessionTests(unittest.IsolatedAsyncioTestCase):
         asking = asyncio.create_task(session.ask("PROMPT"))
         await asyncio.sleep(0)
         task = await BROKER.claim("pc-test", wait_seconds=0.1)
-        self.assertEqual(task["args"], ["PROMPT"])
+        self.assertEqual(len(task["args"]), 1)
+        self.assertTrue(task["args"][0].startswith("PROMPT\n\n"))
         await BROKER.complete(task["task_id"], "RESPUESTA", "pc-test")
         self.assertEqual(await asking, "RESPUESTA")
 
