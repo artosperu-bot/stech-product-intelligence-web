@@ -17,8 +17,8 @@ class RemoteResearchStateTests(unittest.IsolatedAsyncioTestCase):
         task1 = await BROKER.claim(worker_id, wait_seconds=0.1)
         self.assertIsNotNone(task1)
         prompt1 = task1["args"][0]
-        self.assertIn("STECH PRICE INTELLIGENCE — PASADA 1/3", prompt1)
-        self.assertIn("no es cobertura comercial suficiente", prompt1.casefold())
+        self.assertIn("STECH PRICE INTELLIGENCE V3 — PERÚ — PASADA 1/3", prompt1)
+        self.assertIn("no pares por encontrar la oficial", prompt1.casefold())
         self.assertNotIn("STECH_RESEARCH_STATE", prompt1)
         response1 = '{"producto":{"marca":"Kingston"},"ofertas":[{"tienda":"Tienda A"}]}'
         await BROKER.complete(task1["task_id"], response1, worker_id)
@@ -29,7 +29,7 @@ class RemoteResearchStateTests(unittest.IsolatedAsyncioTestCase):
         task2 = await BROKER.claim(worker_id, wait_seconds=0.1)
         self.assertIsNotNone(task2)
         prompt2 = task2["args"][0]
-        self.assertIn("STECH PRICE INTELLIGENCE — PASADA 2/3", prompt2)
+        self.assertIn("STECH PRICE INTELLIGENCE V3 — PERÚ — PASADA 2/3", prompt2)
         self.assertIn("STECH_RESEARCH_STATE", prompt2)
         self.assertIn("Tienda A", prompt2)
         self.assertIn("No cambies el contrato JSON", prompt2)
