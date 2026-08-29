@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Callable, Awaitable
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .frontend_compat import FRONTEND_COMPAT_JS, inject_frontend_compat, normalize_frontend_identifier
 from .jobs import JobStore
 from .progress import ProgressEvent, encode_ndjson
 from .settings import APP_NAME, APP_VERSION, WORKFLOWS, STATIC_DIR, RUNTIME_DIR
@@ -76,6 +77,7 @@ async def _stream_job(kind: str, runner: Callable, *args, job=None):
 
 @app.post('/api/template/inspect')
 async def template_inspect(identifier: str = Form(''), template: UploadFile = File(...)):
+    identifier = normalize_frontend_identifier(identifier)
     job = STORE.create('inspect')
     path = await _save_upload(template, job.directory)
     try:
@@ -85,6 +87,7 @@ async def template_inspect(identifier: str = Form(''), template: UploadFile = Fi
 
 @app.post('/api/run/characteristics')
 async def run_characteristics_api(identifier: str = Form(''), template: UploadFile = File(...)):
+    identifier = normalize_frontend_identifier(identifier)
     job = STORE.create('characteristics')
     path = await _save_upload(template, job.directory)
     return StreamingResponse(_stream_job('characteristics', run_characteristics, identifier, path, job=job), media_type='application/x-ndjson')
@@ -140,8 +143,18 @@ if STATIC_DIR.exists():
     assets = STATIC_DIR / 'assets'
     if assets.exists(): app.mount('/assets', StaticFiles(directory=assets), name='assets')
 
+@app.get('/stech-auto-identifier.js', include_in_schema=False)
+async def frontend_auto_identifier_script():
+    return Response(
+        FRONTEND_COMPAT_JS,
+        media_type='application/javascript',
+        headers={'Cache-Control': 'no-store'},
+    )
+
 @app.get('/{full_path:path}')
 async def spa(full_path: str):
     index = STATIC_DIR / 'index.html'
-    if index.exists(): return FileResponse(index)
+    if index.exists():
+        html = inject_frontend_compat(index.read_text(encoding='utf-8'))
+        return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
     return health_payload()
