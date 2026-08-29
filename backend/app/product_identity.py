@@ -90,7 +90,7 @@ def _find_header_row(ws) -> tuple[int, dict[int, str]]:
     best_headers: dict[int, str] = {}
     best_score = 0
     for row_idx, row in enumerate(
-        ws.iter_rows(min_row=1, max_row=min(ws.max_row, 30)),
+        ws.iter_rows(min_row=1, max_row=30),
         start=1,
     ):
         headers: dict[int, str] = {}
