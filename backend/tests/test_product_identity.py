@@ -22,6 +22,19 @@ def make_workbook(path: Path):
     wb.save(path)
 
 
+def make_workbook_with_leading_empty_cells(path: Path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Subir plantilla'
+    headers = ['Marca #26', 'SKU del vendedor #29', 'Modelo #32', 'Código de barras #56', 'Nombre #39']
+    values = ['EPSON', '', 'C11CL62301', '0103439891745', 'Impresora Epson EcoTank L3350']
+    for column, value in enumerate(headers, start=2):
+        ws.cell(row=4, column=column, value=value)
+    for column, value in enumerate(values, start=2):
+        ws.cell(row=5, column=column, value=value)
+    wb.save(path)
+
+
 class ProductIdentityTests(unittest.TestCase):
     def test_extracts_part_number_from_model_and_barcode_separately(self):
         with tempfile.TemporaryDirectory() as td:
@@ -32,6 +45,16 @@ class ProductIdentityTests(unittest.TestCase):
         self.assertEqual(by_value['C11CL62301'].kind, 'PART_NUMBER')
         self.assertEqual(by_value['C11CL62301'].field_name, 'Modelo #32')
         self.assertEqual(by_value['0103439891745'].kind, 'EAN_UPC_GTIN')
+
+    def test_extracts_candidates_when_first_columns_and_rows_are_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'template.xlsx'
+            make_workbook_with_leading_empty_cells(path)
+            candidates = extract_identity_candidates(path)
+        by_value = {c.value: c for c in candidates}
+        self.assertEqual(by_value['C11CL62301'].row, 5)
+        self.assertEqual(by_value['C11CL62301'].kind, 'PART_NUMBER')
+        self.assertEqual(by_value['0103439891745'].row, 5)
 
     def test_manual_identifier_wins_and_auto_uses_best_candidate(self):
         with tempfile.TemporaryDirectory() as td:
