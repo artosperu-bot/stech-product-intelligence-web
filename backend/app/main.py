@@ -75,7 +75,7 @@ async def _stream_job(kind: str, runner: Callable, *args, job=None):
     await task
 
 @app.post('/api/template/inspect')
-async def template_inspect(identifier: str = Form(...), template: UploadFile = File(...)):
+async def template_inspect(identifier: str = Form(''), template: UploadFile = File(...)):
     job = STORE.create('inspect')
     path = await _save_upload(template, job.directory)
     try:
@@ -84,7 +84,7 @@ async def template_inspect(identifier: str = Form(...), template: UploadFile = F
         raise HTTPException(400, str(exc))
 
 @app.post('/api/run/characteristics')
-async def run_characteristics_api(identifier: str = Form(...), template: UploadFile = File(...)):
+async def run_characteristics_api(identifier: str = Form(''), template: UploadFile = File(...)):
     job = STORE.create('characteristics')
     path = await _save_upload(template, job.directory)
     return StreamingResponse(_stream_job('characteristics', run_characteristics, identifier, path, job=job), media_type='application/x-ndjson')

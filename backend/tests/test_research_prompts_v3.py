@@ -56,6 +56,17 @@ class ResearchPromptsV3Tests(unittest.TestCase):
         self.assertIn('FALTANTES', followup)
         self.assertIn('no vuelvas a investigar', followup.casefold())
 
+    def test_characteristics_research_requires_pdf_evidence_and_canonical_identity(self):
+        prompt = guidance_for('characteristics', 1)
+        for needle in (
+            'datasheet', 'specification sheet', 'brochure', 'product guide', 'user manual',
+            'PDF', 'página', 'manufacturer_part_number', 'commercial_model',
+            'SKU del vendedor #29', 'ESPECIFICACIONES_COMPLETAS', 'IA_EVIDENCIA',
+        ):
+            self.assertIn(needle, prompt)
+        self.assertIn('CORRECTO > COMPLETO', prompt)
+        self.assertIn('No mezcles', prompt)
+
     def test_all_prompts_enforce_clean_urls_and_exact_json_contract(self):
         for kind in ('prices', 'videos', 'images', 'characteristics'):
             prompt = guidance_for(kind, 1)

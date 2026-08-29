@@ -120,43 +120,76 @@ Antes de terminar, verifica que agotaste razonablemente las ramas de identidad, 
 _CHARACTERISTICS_P1 = r'''
 ============================================================
 STECH PRODUCT SPECIFICATION RESEARCH V3 — PASADA 1
-EVIDENCE-FIRST
+EVIDENCE-FIRST + CANONICAL PRODUCT IDENTITY
 ============================================================
 
 OBJETIVO
-Completar la mayor cantidad posible de campos solicitados con información REAL y VERIFICABLE. CORRECTO > COMPLETO.
+Investigar el producto EXACTO y completar la mayor cantidad posible de información REAL y VERIFICABLE. No te limites a los campos visibles de la plantilla: construye mentalmente una ficha maestra técnica amplia y usa esa investigación para responder el contrato JSON original. CORRECTO > COMPLETO.
 
-FASE 0 — IDENTIDAD
-Confirma marca, modelo, Part Number/MPN, variante, región, generación y capacidad/color cuando alteren el producto.
+FASE 0 — IDENTIDAD CANÓNICA OBLIGATORIA
+Antes de completar atributos distingue explícitamente:
+- manufacturer_part_number: Part Number / MPN exacto del fabricante.
+- commercial_model: modelo comercial real.
+- ean_upc_gtin: EAN, UPC o GTIN confirmado.
+- marca, variante, región, generación, capacidad y color cuando alteren el producto.
+
+REGLA STECH/FALABELLA DE IDENTIDAD
+- SKU del vendedor #29 = manufacturer_part_number confirmado.
+- Modelo #32 = commercial_model confirmado.
+- Código de barras #56 = EAN/UPC/GTIN confirmado; nunca lo uses como MPN por conveniencia.
+Si el identificador inicial aparece en una columna llamada Modelo, NO asumas que es modelo: comprueba si realmente es un Part Number/MPN.
+No mezcles especificaciones, EAN, modelos ni MPN de otra variante, color, capacidad, región o generación.
 
 FASE 1 — FUENTES PRIMARIAS
-Prioriza fabricante, manual, datasheet, página de soporte, especificaciones técnicas oficiales, PDFs oficiales y documentación regulatoria.
+Prioriza en este orden para especificaciones técnicas: PDF/datasheet oficial exacto, página oficial del producto, soporte/manual/documentación oficial, web oficial regional. Después usa distribuidor autorizado o catálogo técnico y solo luego retailer/fuente secundaria para huecos.
 
-FASE 2 — FUENTES SECUNDARIAS PARA HUECOS
-Solo cuando haga falta, usa distribuidores autorizados, retailers confiables, medios técnicos o bases regulatorias. No permitas que una fuente secundaria reemplace una primaria exacta sin justificación.
+FASE 2 — BÚSQUEDA ACTIVA DE PDFs OFICIALES
+Busca activamente documentación del MPN/modelo exactos usando, cuando existan, términos como:
+- datasheet
+- specification sheet
+- ficha técnica
+- brochure
+- product guide
+- user manual
+- service/support manual
+- regulatory document
+- PDF
+Usa búsquedas específicas como <MPN> datasheet PDF, <MPN> specification sheet, <MPN> user manual, <modelo> product guide y site:<fabricante> <MPN> PDF.
 
-FASE 3 — BÚSQUEDA POR CAMPO
-Si un atributo no aparece en una ficha general, investígalo específicamente con MPN/modelo + nombre del atributo, manual, datasheet o PDF. No asumas que una sola búsqueda genérica cubre todos los campos.
+Cuando un dato venga de PDF intenta conservar dentro de los campos de evidencia permitidos por el contrato original: URL directa del documento, título, página exacta cuando sea posible, fragmento/evidencia y el MPN/modelo al que aplica. Nunca atribuyas a este producto una especificación de otra variante del mismo manual/familia.
 
-FASE 4 — CONFLICTOS
-Si dos fuentes discrepan, comprueba variante/región y prioriza la fuente primaria exacta para ese MPN. No mezcles especificaciones de variantes distintas.
+FASE 3 — INVESTIGACIÓN TÉCNICA AMPLIA
+Investiga también especificaciones útiles que excedan los campos solicitados cuando ayuden a validar el producto y resolver huecos. La capa posterior del sistema construirá ESPECIFICACIONES_COMPLETAS e IA_EVIDENCIA con la información que el contrato original permita conservar.
+Conserva EXACTAMENTE el contrato JSON solicitado por el prompt original: no inventes claves si dicho contrato no las permite. Si existen campos de evidencia/notas/fuentes en el contrato, aprovéchalos al máximo para preservar fuente, página PDF y aplicabilidad.
 
-FASE 5 — NO INFERENCIA
-No deduzcas peso desde dimensiones, potencia desde cargador, Bluetooth desde la familia, batería desde otro SKU ni compatibilidad desde un modelo parecido. Si no hay evidencia, deja el dato vacío/null/no verificado según el contrato JSON.
+FASE 4 — BÚSQUEDA POR CAMPO
+Una ficha general no demuestra todos los atributos. Para cada dato faltante o dudoso busca específicamente MPN/modelo + atributo y vuelve a manual, datasheet, specification sheet, soporte o PDF antes de acudir a fuentes más débiles.
+
+FASE 5 — CONFLICTOS
+Si dos fuentes discrepan:
+1. comprueba variante, región, unidad y metodología;
+2. prioriza la fuente primaria exacta para ese MPN;
+3. conserva la evidencia del conflicto cuando el contrato lo permita;
+4. no elijas arbitrariamente un valor si el conflicto no puede resolverse.
+Ejemplo: velocidad borrador no sustituye velocidad ISO si se solicita velocidad estándar/ISO.
+
+FASE 6 — NO INFERENCIA
+No deduzcas peso desde dimensiones, potencia desde cargador, Bluetooth desde la familia, batería desde otro SKU, compatibilidad desde un modelo parecido ni un EAN desde otro país. Si no hay evidencia suficiente, deja el dato vacío/null/no verificado según el contrato JSON. Nunca uses sentinels de control como 89 como valor real de negocio.
 '''.strip()
 
 _CHARACTERISTICS_FOLLOWUP = r'''
 ============================================================
 STECH PRODUCT SPECIFICATION RESEARCH V3 — FOLLOW-UP
-SOLO HUECOS
+SOLO HUECOS + EVIDENCIA FALTANTE
 ============================================================
 
 Continuamos en la MISMA CONVERSACIÓN y con el MISMO producto.
 No vuelvas a investigar lo ya sólidamente validado.
 
 Trabaja únicamente sobre campos FALTANTES, DUDOSOS, CONFLICTIVOS o RECHAZADOS indicados por el prompt original y/o STECH_RESEARCH_STATE.
-Para cada hueco, lanza búsquedas específicas por MPN/modelo + atributo, manual, datasheet, soporte o documentación oficial. Usa fuentes secundarias solo si las primarias no cubren el dato.
-No rebajes datos previamente validados. Si el hueco sigue sin evidencia suficiente, mantenlo vacío/null/no verificado según el contrato JSON.
+Para cada hueco lanza búsquedas específicas por manufacturer_part_number/MPN o commercial_model + atributo, datasheet, specification sheet, user manual, soporte, documentación oficial o PDF.
+Si existe un dato pero le falta evidencia fuerte, intenta mejorar su fuente y registrar página PDF cuando sea posible.
+No rebajes ni reemplaces evidencia primaria exacta por una fuente posterior más débil. No mezcles variantes/regiones. Si el hueco o conflicto sigue sin evidencia suficiente, mantenlo vacío/null/no verificado según el contrato JSON original.
 '''.strip()
 
 _IMAGES = r'''

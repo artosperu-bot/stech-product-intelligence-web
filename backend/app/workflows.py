@@ -1,10 +1,13 @@
 from __future__ import annotations
 import asyncio
 from pathlib import Path
+import re
 import shutil
 import zipfile
 
 from .browser_selector import chatgpt_session
+from .product_characteristics import build_product_intelligence, resolve_characteristics_input, serialize_identity
+from .product_workbook import assert_product_workbook_qa, finalize_product_workbook
 from .serializers import serialize_preview_row, serialize_price_offer, serialize_image_record, serialize_video_record
 from .v30_bridge import CORE_DIR  # noqa: F401
 
@@ -16,8 +19,9 @@ from image_workflow import prepare_image_research, run_image_research, download_
 from video_workflow import prepare_video_research, run_video_research, download_video_records
 
 
-def inspect_template(path: Path, identifier: str) -> dict:
-    prep = prepare_research(path, identifier)
+def inspect_template(path: Path, identifier: str | None = None) -> dict:
+    resolved = resolve_characteristics_input(path, identifier)
+    prep = prepare_research(path, resolved.identifier)
     return {
         'family': prep.schema.family,
         'sheet_name': prep.schema.sheet_name,
@@ -25,6 +29,9 @@ def inspect_template(path: Path, identifier: str) -> dict:
         'data_start_row': prep.schema.data_start_row,
         'researchable_count': prep.researchable_count,
         'fields': [field.original_name for field in prep.schema.research_fields],
+        'input_mode': resolved.input_mode,
+        'detected_identifier': resolved.identifier,
+        'identifier_type': resolved.identifier_type,
     }
 
 
@@ -58,9 +65,11 @@ def _stage_for_message(kind: str, message: str) -> tuple[int, str, str]:
     return 10, '1/1', 'Procesando'
 
 
-async def run_characteristics(job, identifier: str, template_path: Path, emit):
+async def run_characteristics(job, identifier: str | None, template_path: Path, emit):
     emit(8, '1/7', 'Preparando plantilla', 'EXCEL')
-    prep = prepare_research(template_path, identifier)
+    resolved = resolve_characteristics_input(template_path, identifier)
+    emit(11, '1/7', f'Identificador {resolved.identifier_type}: {resolved.identifier}', 'IDENTIDAD')
+    prep = prepare_research(template_path, resolved.identifier)
     emit(14, '1/7', f'{prep.researchable_count} campos investigables detectados', 'EXCEL')
     def progress(message: str):
         pct, step, label = _stage_for_message('characteristics', message)
@@ -72,8 +81,26 @@ async def run_characteristics(job, identifier: str, template_path: Path, emit):
         )
     emit(92, '6/7', 'Preparando vista previa validada', 'VALIDACIÓN')
     rows = build_preview_rows(prep, result.validation)
-    product = (result.validation.raw or {}).get('producto') or {}
-    job.payload = {'preparation': prep, 'validation': result.validation, 'rows': rows, 'product': product, 'raw_paths': result.raw_paths}
+    raw = result.validation.raw if isinstance(result.validation.raw, dict) else {}
+    product = raw.get('producto') or {}
+    intelligence = build_product_intelligence(
+        raw,
+        template_path,
+        resolved.identifier,
+        min_confidence=80,
+    )
+    job.payload = {
+        'preparation': prep,
+        'validation': result.validation,
+        'rows': rows,
+        'product': product,
+        'raw_paths': result.raw_paths,
+        'template_path': template_path,
+        'characteristics_input': resolved,
+        'canonical_identity': intelligence.identity,
+        'master_specifications': intelligence.specifications,
+        'qa_warnings': intelligence.evidence_errors + intelligence.critical_errors,
+    }
     accepted = len(result.validation.accepted)
     return {
         'job_id': job.id,
@@ -83,6 +110,12 @@ async def run_characteristics(job, identifier: str, template_path: Path, emit):
         'rejected_count': len(result.validation.rejected),
         'followup_performed': bool(result.followup_performed),
         'preview': [serialize_preview_row(row) for row in rows],
+        'input_mode': resolved.input_mode,
+        'detected_identifier': resolved.identifier,
+        'identifier_type': resolved.identifier_type,
+        'identity': serialize_identity(intelligence.identity),
+        'qa_ready': intelligence.qa_ready,
+        'qa_warnings': intelligence.evidence_errors + intelligence.critical_errors,
     }
 
 
@@ -147,9 +180,31 @@ async def run_videos(job, identifier: str, emit):
     return {'job_id': job.id, 'product': product, 'videos': videos, 'count': len(videos), 'scan_error': run.scan_error}
 
 
+def _artifact_status_path(path: Path, completed: bool) -> Path:
+    path = Path(path)
+    stem = re.sub(r'(?i)(?:_)?COMPLETADO', '', path.stem)
+    stem = re.sub(r'(?i)(?:_)?NO_VALIDADO', '', stem).rstrip('_- ')
+    marker = 'COMPLETADO' if completed else 'NO_VALIDADO'
+    return path.with_name(f'{stem}_{marker}{path.suffix}')
+
+
 def generate_excel(job) -> Path:
     prep = job.payload['preparation']; validation = job.payload['validation']
-    return write_validated_workbook(prep, validation, output_dir=job.directory)
+    path = Path(write_validated_workbook(prep, validation, output_dir=job.directory))
+    identity = job.payload.get('canonical_identity')
+    if identity is None:
+        return path
+    specifications = job.payload.get('master_specifications') or []
+    qa = finalize_product_workbook(path, identity, specifications, [])
+    if not qa.ok:
+        blocked = _artifact_status_path(path, completed=False)
+        if blocked != path:
+            path.replace(blocked)
+        assert_product_workbook_qa(qa)
+    completed = _artifact_status_path(path, completed=True)
+    if completed != path:
+        path.replace(completed)
+    return completed
 
 
 def generate_prices_xlsx(job) -> Path:
