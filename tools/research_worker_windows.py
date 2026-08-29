@@ -28,7 +28,12 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.chatgpt_dom_capture import extract_json_payload
 from app.remote_protocol import decode_remote_value
-from app.worker_chat_policy import WorkerChatRouter, composer_has_unsent_prompt, pop_remote_context
+from app.worker_chat_policy import (
+    WorkerChatRouter,
+    composer_has_unsent_prompt,
+    pop_remote_context,
+    prepare_chatgpt_composer,
+)
 
 
 def ensure_legacy_core() -> None:
@@ -146,6 +151,7 @@ async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: floa
     try:
         await asyncio.sleep(max(0.5, float(delay_seconds)))
         page = await recover_chatgpt_page(session)
+        await prepare_chatgpt_composer(page, timeout_seconds=5.0)
         composer = page.locator("#prompt-textarea")
         if await composer.count() < 1:
             return
@@ -239,16 +245,21 @@ async def ask_in_job_chat_retry(
     for attempt in range(1, attempts + 1):
         if attempt > 1:
             router.reset(chat_key)
-        await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
-        baseline_count = await assistant_message_count(session)
 
         guard = None
-        if expected_prompt:
-            guard = asyncio.create_task(guard_unsent_prompt(session, expected_prompt))
-        ask_task = asyncio.create_task(session.ask(*args, **kwargs))
-        dom_task = asyncio.create_task(wait_for_new_assistant_json(session, baseline_count))
-
+        ask_task = None
+        dom_task = None
         try:
+            page = await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
+            await prepare_chatgpt_composer(page)
+            session._note("Compositor real de ChatGPT estable y listo.")
+            baseline_count = await assistant_message_count(session)
+
+            if expected_prompt:
+                guard = asyncio.create_task(guard_unsent_prompt(session, expected_prompt))
+            ask_task = asyncio.create_task(session.ask(*args, **kwargs))
+            dom_task = asyncio.create_task(wait_for_new_assistant_json(session, baseline_count))
+
             done, _ = await asyncio.wait({ask_task, dom_task}, return_when=asyncio.FIRST_COMPLETED)
             if ask_task in done:
                 result = await ask_task
@@ -276,10 +287,10 @@ async def ask_in_job_chat_retry(
             if guard is not None:
                 guard.cancel()
                 await asyncio.gather(guard, return_exceptions=True)
-            if not dom_task.done():
+            if dom_task is not None and not dom_task.done():
                 dom_task.cancel()
                 await asyncio.gather(dom_task, return_exceptions=True)
-            if not ask_task.done():
+            if ask_task is not None and not ask_task.done():
                 ask_task.cancel()
                 await asyncio.gather(ask_task, return_exceptions=True)
 
