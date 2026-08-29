@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -31,17 +32,23 @@ from app.worker_chat_policy import WorkerChatRouter, composer_has_unsent_prompt,
 
 
 def ensure_legacy_core() -> None:
-    if (CORE_DIR / "chatgpt_browser.py").exists():
-        return
     parts = sorted(BUNDLE_DIR.glob("part-*.b64"))
     if not parts:
         raise RuntimeError("No encuentro legacy_core_bundle_v2. Ejecuta el worker desde el repositorio STECH.")
+
     encoded = "".join(p.read_text(encoding="ascii") for p in parts)
     archive = base64.b64decode(encoded)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tf:
-        tf.extractall(ROOT)
+        names = set(tf.getnames())
+        if "backend/legacy_core/chatgpt_browser.py" not in names:
+            raise RuntimeError("legacy_core_bundle_v2 no contiene backend/legacy_core/chatgpt_browser.py")
+        if CORE_DIR.exists():
+            shutil.rmtree(CORE_DIR)
+        tf.extractall(ROOT, filter="data")
+
     if not (CORE_DIR / "chatgpt_browser.py").exists():
         raise RuntimeError("legacy_core se extrajo pero falta chatgpt_browser.py")
+    print("[CORE] legacy_core sincronizado desde el bundle versionado.", flush=True)
 
 
 def chrome_candidates() -> list[Path]:
