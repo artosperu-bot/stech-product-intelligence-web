@@ -1,5 +1,0 @@
-Worker token validation cases for tools/start_research_worker.ps1
-
-- Empty token -> exit 2 before Python/httpx.
-- Token containing whitespace or non-ASCII -> exit 3 before Python/httpx.
-- Printable ASCII token -> value remains hidden; only length is logged; worker starts normally.
