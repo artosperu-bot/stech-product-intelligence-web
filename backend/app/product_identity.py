@@ -89,7 +89,10 @@ def _find_header_row(ws) -> tuple[int, dict[int, str]]:
     best_row = 0
     best_headers: dict[int, str] = {}
     best_score = 0
-    for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 30)):
+    for row_idx, row in enumerate(
+        ws.iter_rows(min_row=1, max_row=min(ws.max_row, 30)),
+        start=1,
+    ):
         headers: dict[int, str] = {}
         score = 0
         for cell in row:
@@ -102,7 +105,7 @@ def _find_header_row(ws) -> tuple[int, dict[int, str]]:
                 score += 1
         if score > best_score:
             best_score = score
-            best_row = row[0].row
+            best_row = row_idx
             best_headers = headers
     if best_score == 0:
         raise ValueError('TEMPLATE_HEADER_NOT_FOUND')
@@ -150,7 +153,10 @@ def extract_identity_candidates(path: Path) -> list[IdentityCandidate]:
         header_row, headers = _find_header_row(ws)
         candidates: list[IdentityCandidate] = []
         seen: set[tuple[str, str, int]] = set()
-        for row in ws.iter_rows(min_row=header_row + 1):
+        for row_idx, row in enumerate(
+            ws.iter_rows(min_row=header_row + 1),
+            start=header_row + 1,
+        ):
             for column, field_name in headers.items():
                 value = _text(row[column - 1].value)
                 if not value:
@@ -158,14 +164,14 @@ def extract_identity_candidates(path: Path) -> list[IdentityCandidate]:
                 kind = classify_identifier(value, field_name)
                 if kind == 'UNKNOWN':
                     continue
-                key = (value, field_name, row[0].row)
+                key = (value, field_name, row_idx)
                 if key in seen:
                     continue
                 seen.add(key)
                 priority = _priority_for_header(field_name)
                 if kind == 'EAN_UPC_GTIN':
                     priority = min(priority, 80)
-                candidates.append(IdentityCandidate(value, kind, field_name, row[0].row, priority))
+                candidates.append(IdentityCandidate(value, kind, field_name, row_idx, priority))
         candidates.extend(_evidence_candidates(wb))
         candidates.sort(key=lambda c: (-c.priority, c.row, c.field_name, c.value))
         return candidates
