@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -11,6 +12,32 @@ from .research_broker import BROKER
 from .research_prompts import guidance_for
 from .result_sanitizer import sanitize_research_result
 from .worker_chat_policy import REMOTE_CONTEXT_KWARG
+
+
+async def wait_for_worker_online(
+    status_provider,
+    *,
+    grace_seconds: float = 12.0,
+    poll_seconds: float = 0.5,
+    sleep=asyncio.sleep,
+    initial_status: dict | None = None,
+) -> dict:
+    """Wait briefly for a worker that is in the middle of reconnecting/registering."""
+    grace = max(0.0, float(grace_seconds))
+    poll = max(0.05, float(poll_seconds))
+    status = dict(initial_status or await status_provider())
+    if status.get("online") or grace <= 0:
+        return status
+
+    elapsed = 0.0
+    while elapsed < grace:
+        delay = min(poll, grace - elapsed)
+        await sleep(delay)
+        elapsed += delay
+        status = dict(await status_provider())
+        if status.get("online"):
+            break
+    return status
 
 
 class RemoteChatGPTBrowserSession:
@@ -28,6 +55,14 @@ class RemoteChatGPTBrowserSession:
 
     async def __aenter__(self):
         status = await BROKER.status()
+        if not status.get("online"):
+            self._note("Worker Windows reconectando; esperando registro antes de continuar...")
+            status = await wait_for_worker_online(
+                BROKER.status,
+                initial_status=status,
+                grace_seconds=float(os.getenv("STECH_RESEARCH_WORKER_CONNECT_GRACE_SECONDS", "12")),
+                poll_seconds=float(os.getenv("STECH_RESEARCH_WORKER_CONNECT_POLL_SECONDS", "0.5")),
+            )
         if not status.get("online"):
             raise RuntimeError(
                 "RESEARCH_WORKER_OFFLINE: inicia STECH Research Worker en la PC con Chrome antes de buscar."
