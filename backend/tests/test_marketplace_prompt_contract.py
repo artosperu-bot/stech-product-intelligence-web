@@ -21,7 +21,7 @@ class MarketplacePromptContractTests(unittest.TestCase):
                     column_letter='A',
                     label='Nombre #39',
                     code='Nombre',
-                    instruction='Título optimizado. Máximo 60 caracteres. - Value: Parlante Marca Modelo Negro',
+                    instruction='Título optimizado (máx. 60 caracteres permitidos, incluyendo tipo de producto, marca, modelo y color). - Value: Parlante Marca Modelo Negro',
                     example_value='Parlante Marca Modelo Negro',
                     requirements={'*': 'REQUIRED'},
                 ),
@@ -30,7 +30,7 @@ class MarketplacePromptContractTests(unittest.TestCase):
                     column_letter='B',
                     label='Descripción #53',
                     code='Descripción',
-                    instruction='Descripción comercial con beneficios, uso y características. Máximo 3000 caracteres. Sin emojis.',
+                    instruction='Descripción comercial con beneficios, uso y características, con un máximo de 3000 caracteres, sin emojis.',
                     requirements={'*': 'REQUIRED'},
                 ),
                 TemplateField(
@@ -74,7 +74,7 @@ class MarketplacePromptContractTests(unittest.TestCase):
         self.assertIn('falabella', text.lower())
         self.assertIn('Fila producto: 5', text)
         self.assertIn('JBLCHARGE6SQUADAM', text)
-        self.assertIn('Máximo 3000 caracteres', text)
+        self.assertIn('máximo de 3000 caracteres', text)
         self.assertIn('VALORES PERMITIDOS: Bluetooth | Wifi | USB', text)
         self.assertIn('VALOR EXISTENTE VALIDADO/PRESERVAR: Bluetooth', text)
         self.assertIn('EJEMPLO DE FORMATO — NO COPIAR COMO DATO', text)
