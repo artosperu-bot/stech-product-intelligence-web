@@ -34,7 +34,7 @@ async def register_worker_with_retry(
     can recover without restarting Chrome or the worker process.
     """
     server = str(server or "").rstrip("/")
-    delay = max(0.1, float(retry_delay_seconds))
+    delay = max(0.0, float(retry_delay_seconds))
     timeout = max(5.0, float(heartbeat_timeout_seconds))
 
     while True:
