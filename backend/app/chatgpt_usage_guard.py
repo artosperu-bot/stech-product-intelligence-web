@@ -37,18 +37,52 @@ def detect_chatgpt_usage_limit_text(text: str) -> ChatGPTUsageLimitState | None:
         return None
     normalized = _normalize(raw)
 
-    strong_markers = (
-        "chat en pausa",
-        "has alcanzado el limite de chats",
-        "se restablezca el uso",
-        "limite de chats que incluyen analisis de datos",
-        "chat paused",
-        "you've reached the limit",
-        "you have reached the limit",
-        "usage resets",
-        "limit for chats with data analysis",
+    spanish_pause = "chat en pausa" in normalized and any(
+        marker in normalized
+        for marker in (
+            "se restablezca el uso",
+            "limite de chats",
+            "analisis de datos",
+        )
     )
-    if not any(marker in normalized for marker in strong_markers):
+    spanish_limit = "limite de chats" in normalized and any(
+        marker in normalized
+        for marker in (
+            "has alcanzado",
+            "nuevo chat",
+            "solo de texto",
+            "se restablezca",
+        )
+    )
+    english_pause = any(
+        marker in normalized for marker in ("chat paused", "chat is paused")
+    ) and any(
+        marker in normalized
+        for marker in (
+            "usage resets",
+            "reached the limit",
+            "data analysis",
+        )
+    )
+    english_limit = any(
+        marker in normalized
+        for marker in (
+            "you've reached the limit",
+            "you have reached the limit",
+            "limit for chats with data analysis",
+        )
+    ) and any(
+        marker in normalized
+        for marker in (
+            "new chat",
+            "text-only",
+            "text only",
+            "usage resets",
+            "data analysis",
+        )
+    )
+
+    if not (spanish_pause or spanish_limit or english_pause or english_limit):
         return None
 
     reset_hint = ""
