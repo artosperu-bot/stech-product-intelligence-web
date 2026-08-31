@@ -1,6 +1,6 @@
 import unittest
 
-from app.worker_chat_policy import (
+from app.chatgpt_usage_guard import (
     ChatGPTUsageLimitError,
     detect_chatgpt_usage_limit_text,
 )
