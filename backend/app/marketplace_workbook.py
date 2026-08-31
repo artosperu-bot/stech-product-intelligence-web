@@ -10,6 +10,7 @@ import unicodedata
 from openpyxl import load_workbook
 from openpyxl.styles import Font
 
+from .marketplace_prompt_contract import validate_template_value
 from .marketplace_template import MarketplaceTemplateProfile, ProductSlot, TemplateField, is_placeholder_value
 from .product_identity import CanonicalIdentity
 from .product_evidence import MasterSpecification
@@ -408,7 +409,13 @@ def write_marketplace_workbook(
                 identity_fields = (semantic['brand'], semantic['mpn'], semantic['model'], semantic['barcode'])
                 if any(field is identity_field for identity_field in identity_fields):
                     continue
-                changed, kept = _set_if_blank_or_example(ws, slot.row, field, value)
+                check = validate_template_value(field, value)
+                if not check.ok:
+                    local_warnings.append(
+                        f'TEMPLATE_VALUE_REJECTED:{field.label or field.code}:{check.reason}'
+                    )
+                    continue
+                changed, kept = _set_if_blank_or_example(ws, slot.row, field, check.value)
                 written += int(changed); preserved += int(kept)
                 validated_keys.add(_compact(field.code))
 
