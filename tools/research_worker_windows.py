@@ -34,6 +34,7 @@ from app.worker_chat_policy import (
     pop_remote_context,
     prepare_chatgpt_composer,
 )
+from app.worker_runtime import register_worker_with_retry
 
 
 def ensure_legacy_core() -> None:
@@ -360,8 +361,14 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
 
     async with httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(35.0, connect=10.0)) as client:
         async with session:
-            heartbeat = await client.post(f"{server}/api/research-worker/heartbeat", json={"worker_id": worker_id})
-            heartbeat.raise_for_status()
+            await register_worker_with_retry(
+                client,
+                server,
+                worker_id,
+                retry_delay_seconds=float(os.getenv("STECH_WORKER_REGISTER_RETRY_SECONDS", "5")),
+                heartbeat_timeout_seconds=float(os.getenv("STECH_WORKER_HEARTBEAT_TIMEOUT_SECONDS", "60")),
+                log=lambda message: print(message, flush=True),
+            )
             print(f"[WORKER] CONECTADO a {server} como {worker_id}")
             print("[WORKER] Esperando trabajos de Render...")
 
