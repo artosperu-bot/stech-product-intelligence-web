@@ -44,12 +44,13 @@ def _name_key(value: str) -> str:
 
 
 def extract_character_limit(field: TemplateField) -> int | None:
-    text = _text(field.instruction)
+    text = _norm(field.instruction)
     if not text:
         return None
     patterns = (
-        r'(?i)\b(?:máximo|maximo|max(?:imum)?|hasta)\s*(?:de\s*)?(\d{1,5})\s*(?:caracteres|characters)\b',
-        r'(?i)\b(\d{1,5})\s*(?:caracteres|characters)\s*(?:máximo|maximo|max(?:imum)?)\b',
+        r'\b(?:maximo|max\.?|maximum|hasta)\s*(?:de\s*)?(\d{1,5})\s*(?:caracteres|characters)\b',
+        r'\b(?:con\s+un\s+)?(?:maximo|max\.?|maximum)\s+de\s+(\d{1,5})\s*(?:caracteres|characters)\b',
+        r'\b(\d{1,5})\s*(?:caracteres|characters)\s*(?:maximo|max\.?|maximum)\b',
     )
     for pattern in patterns:
         match = re.search(pattern, text)
@@ -70,8 +71,6 @@ def _canonical_allowed(field: TemplateField, value: str) -> str | None:
     if whole is not None:
         return whole
 
-    # Marketplace multi-select fields are commonly returned with pipe separators.
-    # Semicolon is accepted as an input convenience and normalized back to pipe.
     if '|' not in value and ';' not in value:
         return None
     parts = [part.strip() for part in re.split(r'[|;]', value) if part.strip()]
@@ -110,8 +109,6 @@ def _clean_instruction(field: TemplateField, max_chars: int = 1400) -> str:
     instruction = _text(field.instruction)
     if not instruction:
         return ''
-    # Keep the marketplace wording, but remove a standalone example line when the
-    # parser already extracted it. This reduces the chance of copying examples.
     if field.example_value:
         example_norm = _norm(field.example_value)
         lines = []
