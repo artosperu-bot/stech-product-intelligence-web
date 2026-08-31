@@ -60,6 +60,10 @@ def resolve_characteristics_slots(
     manual_identifier: str | None = None,
 ) -> tuple[MarketplaceTemplateProfile, list[ProductSlot]]:
     profile = analyze_marketplace_template(template_path)
+    # Real Falabella marketplace templates contain instruction/requirement rows before
+    # the mapped row. Compact historical test/legacy sheets keep the previous resolver.
+    if profile.marketplace == 'falabella' and profile.header_rows[-1] < 4:
+        raise ValueError('UNSUPPORTED_MARKETPLACE_TEMPLATE')
     manual = str(manual_identifier or '').strip()
     if manual:
         return profile, [_manual_slot(profile, manual)]
