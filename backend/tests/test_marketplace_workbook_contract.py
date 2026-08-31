@@ -66,7 +66,21 @@ class MarketplaceWorkbookContractTests(unittest.TestCase):
             ws = wb['Subir plantilla']
             self.assertIsNone(ws['D5'].value)
             self.assertIsNone(ws['E5'].value)
+
+            evidence = wb['IA_EVIDENCIA']
+            rejected = {
+                row[1].value: (row[3].value, row[4].value, row[10].value)
+                for row in evidence.iter_rows(min_row=2)
+                if row[1].value in {'Descripción #53', 'Color #100'}
+            }
+            self.assertEqual(rejected['Descripción #53'][0], None)
+            self.assertEqual(rejected['Descripción #53'][1], 'REJECTED_TEMPLATE')
+            self.assertIn('MAX_CHARS_EXCEEDED:40', rejected['Descripción #53'][2])
+            self.assertEqual(rejected['Color #100'][0], None)
+            self.assertEqual(rejected['Color #100'][1], 'REJECTED_TEMPLATE')
+            self.assertIn('VALUE_NOT_ALLOWED', rejected['Color #100'][2])
             wb.close()
+
             warnings = qa.products[0].warnings
             self.assertTrue(any('MAX_CHARS_EXCEEDED:40' in item for item in warnings))
             self.assertTrue(any('VALUE_NOT_ALLOWED' in item for item in warnings))
