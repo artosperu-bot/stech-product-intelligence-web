@@ -27,6 +27,11 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.chatgpt_dom_capture import extract_json_payload
+from app.chatgpt_usage_guard import (
+    ChatGPTUsageLimitError,
+    detect_chatgpt_usage_limit,
+    raise_if_chatgpt_usage_limited,
+)
 from app.remote_protocol import decode_remote_value
 from app.worker_chat_policy import (
     WorkerChatRouter,
@@ -152,6 +157,7 @@ async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: floa
     try:
         await asyncio.sleep(max(0.5, float(delay_seconds)))
         page = await recover_chatgpt_page(session)
+        await raise_if_chatgpt_usage_limited(page)
         await prepare_chatgpt_composer(page, timeout_seconds=5.0)
         composer = page.locator("#prompt-textarea")
         if await composer.count() < 1:
@@ -160,6 +166,7 @@ async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: floa
         if not composer_has_unsent_prompt(expected_prompt, text):
             return
 
+        await raise_if_chatgpt_usage_limited(page)
         send = page.locator('button[data-testid="send-button"]')
         if await send.count() < 1:
             send = page.locator('button[aria-label*="Enviar"], button[aria-label*="Send"]')
@@ -171,6 +178,8 @@ async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: floa
             await button.click(timeout=5000)
     except asyncio.CancelledError:
         raise
+    except ChatGPTUsageLimitError:
+        raise
     except Exception:
         return
 
@@ -181,6 +190,20 @@ async def assistant_message_count(session) -> int:
         return await page.locator('[data-message-author-role="assistant"]').count()
     except Exception:
         return 0
+
+
+async def watch_chatgpt_usage_limit(session, poll_seconds: float = 0.35) -> None:
+    """Run until ChatGPT exposes an account/chat usage gate, then fail explicitly."""
+    while True:
+        page = await recover_chatgpt_page(session)
+        state = await detect_chatgpt_usage_limit(page)
+        if state is not None:
+            raise ChatGPTUsageLimitError(
+                state.message,
+                reset_hint=state.reset_hint,
+                suggests_new_chat=state.suggests_new_chat,
+            )
+        await asyncio.sleep(max(0.1, float(poll_seconds)))
 
 
 async def wait_for_new_assistant_json(
@@ -198,6 +221,7 @@ async def wait_for_new_assistant_json(
     while loop.time() < deadline:
         try:
             page = await recover_chatgpt_page(session)
+            await raise_if_chatgpt_usage_limited(page)
             messages = page.locator('[data-message-author-role="assistant"]')
             count = await messages.count()
             if count > baseline_count:
@@ -225,6 +249,8 @@ async def wait_for_new_assistant_json(
                     stable_since = None
         except asyncio.CancelledError:
             raise
+        except ChatGPTUsageLimitError:
+            raise
         except Exception:
             pass
         await asyncio.sleep(0.4)
@@ -250,9 +276,12 @@ async def ask_in_job_chat_retry(
         guard = None
         ask_task = None
         dom_task = None
+        usage_task = None
         try:
             page = await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
+            await raise_if_chatgpt_usage_limited(page)
             await prepare_chatgpt_composer(page)
+            await raise_if_chatgpt_usage_limited(page)
             session._note("Compositor real de ChatGPT estable y listo.")
             baseline_count = await assistant_message_count(session)
 
@@ -260,8 +289,15 @@ async def ask_in_job_chat_retry(
                 guard = asyncio.create_task(guard_unsent_prompt(session, expected_prompt))
             ask_task = asyncio.create_task(session.ask(*args, **kwargs))
             dom_task = asyncio.create_task(wait_for_new_assistant_json(session, baseline_count))
+            usage_task = asyncio.create_task(watch_chatgpt_usage_limit(session))
 
-            done, _ = await asyncio.wait({ask_task, dom_task}, return_when=asyncio.FIRST_COMPLETED)
+            done, _ = await asyncio.wait(
+                {ask_task, dom_task, usage_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if usage_task in done:
+                await usage_task
+                raise RuntimeError("CHATGPT_USAGE_WATCH_UNREACHABLE")
             if ask_task in done:
                 result = await ask_task
             else:
@@ -279,6 +315,30 @@ async def ask_in_job_chat_retry(
             router.remember(chat_key, session)
             return result
         except Exception as exc:
+            classified = exc
+            if not isinstance(classified, ChatGPTUsageLimitError):
+                try:
+                    current_page = await recover_chatgpt_page(session)
+                    state = await detect_chatgpt_usage_limit(current_page)
+                except Exception:
+                    state = None
+                if state is not None:
+                    classified = ChatGPTUsageLimitError(
+                        state.message,
+                        reset_hint=state.reset_hint,
+                        suggests_new_chat=state.suggests_new_chat,
+                    )
+
+            if isinstance(classified, ChatGPTUsageLimitError):
+                router.reset(chat_key)
+                reset_text = f" hasta {classified.reset_hint}" if classified.reset_hint else ""
+                if attempt < attempts and classified.suggests_new_chat:
+                    session._note(
+                        f"ChatGPT indicó un límite temporal{reset_text}; probando una sola vez en un chat nuevo..."
+                    )
+                    continue
+                raise classified
+
             if attempt >= attempts:
                 raise
             session._note(
@@ -288,6 +348,9 @@ async def ask_in_job_chat_retry(
             if guard is not None:
                 guard.cancel()
                 await asyncio.gather(guard, return_exceptions=True)
+            if usage_task is not None and not usage_task.done():
+                usage_task.cancel()
+                await asyncio.gather(usage_task, return_exceptions=True)
             if dom_task is not None and not dom_task.done():
                 dom_task.cancel()
                 await asyncio.gather(dom_task, return_exceptions=True)
