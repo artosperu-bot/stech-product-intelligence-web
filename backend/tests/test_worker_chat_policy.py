@@ -82,11 +82,12 @@ class PromptDispatchTests(unittest.TestCase):
 
 
 class _FakeElement:
-    def __init__(self, visible=True, editable=True, trial_error=None):
+    def __init__(self, visible=True, editable=True, element_id="prompt-textarea"):
         self.visible = visible
         self.editable = editable
-        self.trial_error = trial_error
-        self.trial_clicks = 0
+        self.element_id = element_id
+        self.attrs = {}
+        self.clicks = 0
 
     async def is_visible(self):
         return self.visible
@@ -95,25 +96,49 @@ class _FakeElement:
         return self.editable
 
     async def click(self, **kwargs):
-        self.trial_clicks += 1
-        if self.trial_error:
-            raise RuntimeError(self.trial_error)
+        self.clicks += 1
+        raise AssertionError("composer readiness must not click")
+
+    async def evaluate(self, script, arg=None):
+        if "setAttribute('data-stech-composer-probe'" in script:
+            self.attrs['data-stech-composer-probe'] = arg
+            return True
+        if "removeAttribute('data-stech-composer-probe'" in script:
+            self.attrs.pop('data-stech-composer-probe', None)
+            return True
+        if 'isConnected' in script:
+            return {
+                'connected': True,
+                'id': self.element_id,
+                'role': 'textbox',
+                'contenteditable': 'true' if self.editable else 'false',
+                'ariaHidden': self.attrs.get('aria-hidden', ''),
+                'rect': [0, 0, 100, 40],
+                'hitInside': True,
+            }
+        return None
+
+    async def get_attribute(self, name):
+        if name == 'id':
+            return self.element_id
+        return self.attrs.get(name)
 
 
 class _FakeLocatorList:
-    def __init__(self, elements, on_evaluate_all=None):
-        self.elements = elements
-        self.on_evaluate_all = on_evaluate_all
+    def __init__(self, page, real=False):
+        self.page = page
+        self.real = real
 
     async def count(self):
-        return len(self.elements)
+        return 1
 
     def nth(self, index):
-        return self.elements[index]
+        return self.page.real if self.real else self.page.fallback
 
     async def evaluate_all(self, script):
-        if self.on_evaluate_all:
-            self.on_evaluate_all()
+        self.page.fallback.attrs['aria-hidden'] = 'true'
+        self.page.fallback.attrs['tabindex'] = '-1'
+        self.page.fallback_hidden = True
 
 
 class _FakeRoleResult:
@@ -129,16 +154,11 @@ class _HydratingPage:
     def __init__(self):
         self.url = "https://chatgpt.com/"
         self.real = _FakeElement(visible=True, editable=True)
-        self.fallback = _FakeElement(visible=False, editable=True)
+        self.fallback = _FakeElement(visible=False, editable=True, element_id='')
         self.fallback_hidden = False
 
     def locator(self, selector):
-        if selector == "#prompt-textarea":
-            return _FakeLocatorList([self.real])
-        return _FakeLocatorList(
-            [self.fallback],
-            on_evaluate_all=lambda: setattr(self, "fallback_hidden", True),
-        )
+        return _FakeLocatorList(self, real=selector == "#prompt-textarea")
 
     def get_by_role(self, role):
         self.last_role = role
@@ -146,19 +166,20 @@ class _HydratingPage:
 
 
 class ComposerReadinessTests(unittest.IsolatedAsyncioTestCase):
-    async def test_hides_fallback_textarea_before_legacy_textbox_lookup(self):
+    async def test_hides_fallback_textarea_before_legacy_textbox_lookup_without_clicking(self):
         page = _HydratingPage()
 
         composer = await prepare_chatgpt_composer(
             page,
             timeout_seconds=0.5,
             poll_seconds=0.01,
+            stable_checks=2,
         )
 
         self.assertIs(composer, page.real)
         self.assertTrue(page.fallback_hidden)
         self.assertEqual(page.last_role, "textbox")
-        self.assertGreaterEqual(page.real.trial_clicks, 2)
+        self.assertEqual(page.real.clicks, 0)
 
 
 class RemoteContextTests(unittest.TestCase):
