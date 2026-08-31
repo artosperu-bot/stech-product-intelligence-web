@@ -247,14 +247,31 @@ def _append_preview_trace(evidence_ws, master_ws, profile: MarketplaceTemplatePr
         reason = _text(_item_value(item, 'reason'))
         if not field_name and not value:
             continue
-        written = value if status in _ACCEPTED_STATUSES else ''
-        evidence_ws.append([
-            mpn, field_name, value, written, status, confidence, '', 'MAPPED_FIELD', None,
-            reason, '', profile.marketplace, profile.sheet_name, record.slot.row,
-        ])
+
+        field = _match_field(profile, field_name)
+        trace_status = status
+        written = ''
+        observation = ''
+        canonical_value = value
         if status in _ACCEPTED_STATUSES and value:
+            if field is not None:
+                check = validate_template_value(field, value)
+                if not check.ok:
+                    trace_status = 'REJECTED_TEMPLATE'
+                    observation = check.reason
+                else:
+                    canonical_value = check.value
+                    written = canonical_value
+            else:
+                written = value
+
+        evidence_ws.append([
+            mpn, field_name, value, written, trace_status, confidence, '', 'MAPPED_FIELD', None,
+            reason, observation, profile.marketplace, profile.sheet_name, record.slot.row,
+        ])
+        if trace_status in _ACCEPTED_STATUSES and canonical_value:
             master_ws.append([
-                mpn, 'MAPEADO_PLANTILLA', field_name, value, '', 'CONFIRMED', confidence,
+                mpn, 'MAPEADO_PLANTILLA', field_name, canonical_value, '', 'CONFIRMED', confidence,
                 '', 'MAPPED_FIELD', None, reason, 'MAPEADO', profile.marketplace,
                 profile.sheet_name, record.slot.row,
             ])
