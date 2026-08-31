@@ -6,6 +6,7 @@ import os
 import uuid
 from typing import Any
 
+from .characteristics_quality_guidance import CHARACTERISTICS_QUALITY_GUIDANCE
 from .peru_price_sources import peru_price_seed_guidance
 from .remote_protocol import encode_remote_value
 from .research_broker import BROKER
@@ -78,6 +79,8 @@ class RemoteChatGPTBrowserSession:
         base = guidance_for(self.research_kind, turn)
         if self.research_kind == "prices":
             return f"{base}\n\n{peru_price_seed_guidance()}"
+        if self.research_kind == "characteristics":
+            return f"{base}\n\n{CHARACTERISTICS_QUALITY_GUIDANCE}"
         return base
 
     def _state_block(self) -> str:
