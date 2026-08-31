@@ -6,6 +6,7 @@ import shutil
 import zipfile
 
 from .browser_selector import chatgpt_session
+from .marketplace_prompt_contract import build_marketplace_prompt_contract
 from .marketplace_workbook import ProductWriteRecord, write_marketplace_workbook
 from .product_characteristics import (
     CharacteristicsInput,
@@ -133,6 +134,19 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
             'IDENTIDAD',
         )
         prep = prepare_research(template_path, current_identifier)
+        prompt_context = ''
+        if profile is not None and slot is not None:
+            prompt_context = build_marketplace_prompt_contract(
+                profile,
+                slot,
+                research_field_names=[field.original_name for field in prep.schema.research_fields],
+            )
+            emit(
+                13 + int(4 * ((index - 1) / max(1, total_products))),
+                '1/7',
+                f'Producto {index}/{total_products}: reglas dinámicas de {profile.marketplace} incorporadas al prompt ({len(prompt_context)} caracteres)',
+                'PLANTILLA',
+            )
         emit(
             14 + int(4 * ((index - 1) / max(1, total_products))),
             '1/7',
@@ -145,7 +159,11 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
             emit(_product_pct(pct, _index, total_products), step, f'Producto {_index}/{total_products}: {message}', label)
 
         emit(_product_pct(20, index, total_products), '2/7', f'Producto {index}/{total_products}: iniciando sesión de investigación ChatGPT', 'NAVEGADOR')
-        async with chatgpt_session(progress=progress, research_kind='characteristics') as session:
+        async with chatgpt_session(
+            progress=progress,
+            research_kind='characteristics',
+            prompt_context=prompt_context,
+        ) as session:
             result = await run_research_for_preview_once(
                 prep,
                 session.ask,
@@ -177,6 +195,7 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
             'master_specifications': intelligence.specifications,
             'qa_warnings': intelligence.evidence_errors + intelligence.critical_errors,
             'followup_performed': bool(result.followup_performed),
+            'prompt_contract_chars': len(prompt_context),
         })
 
     emit(92, '6/7', f'Preparando vista previa validada de {total_products} producto(s)', 'VALIDACIÓN')
@@ -218,6 +237,7 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
             'identity': serialize_identity(item['canonical_identity']),
             'qa_ready': not item['qa_warnings'],
             'qa_warnings': item['qa_warnings'],
+            'prompt_contract_chars': item.get('prompt_contract_chars', 0),
         })
 
     return {
