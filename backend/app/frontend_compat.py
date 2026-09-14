@@ -45,12 +45,10 @@ FRONTEND_COMPAT_JS = r"""(() => {
 
   function applyCharacteristicsCopy() {
     if (!isCharacteristics()) return;
-
     const input = findIdentifierInput();
     if (!input) return;
 
     input.placeholder = 'Opcional: MPN / EAN / UPC / GTIN / SKU / modelo';
-
     for (const el of document.querySelectorAll('label,span,p,div')) {
       if (clean(el.textContent) === 'IDENTIFICADOR DEL PRODUCTO' && el.children.length === 0) {
         el.textContent = 'IDENTIFICADOR DEL PRODUCTO (OPCIONAL)';
@@ -92,6 +90,17 @@ FRONTEND_COMPAT_JS = r"""(() => {
     panel.style.border = '1px solid rgba(127,127,127,.35)';
     panel.style.borderRadius = '12px';
     panel.style.background = 'var(--stech-batch-bg, rgba(127,127,127,.06))';
+  }
+
+  function styleAction(action) {
+    action.style.display = 'inline-block';
+    action.style.padding = '9px 14px';
+    action.style.border = '1px solid currentColor';
+    action.style.borderRadius = '8px';
+    action.style.fontWeight = '700';
+    action.style.textDecoration = 'none';
+    action.style.background = 'transparent';
+    action.style.cursor = 'pointer';
   }
 
   function addPreviewDetails(container, product) {
@@ -165,6 +174,31 @@ FRONTEND_COMPAT_JS = r"""(() => {
     table.appendChild(tbody);
     wrapper.appendChild(table);
     container.appendChild(wrapper);
+  }
+
+  async function retryFailedBatch(data, button) {
+    if (!data || !data.job_id) return;
+    button.disabled = true;
+    button.textContent = 'REINTENTANDO...';
+    try {
+      const response = await window.fetch(
+        `/api/jobs/${encodeURIComponent(data.job_id)}/retry-failed`,
+        { method: 'POST' }
+      );
+      if (!response.ok) {
+        let message = `HTTP ${response.status}`;
+        try {
+          const body = await response.clone().json();
+          message = body.detail || body.message || message;
+        } catch (_) {}
+        throw new Error(message);
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = 'REINTENTAR FALLIDOS';
+      const message = element('span', `No se pudo iniciar el reintento: ${error.message || error}`);
+      button.insertAdjacentElement('afterend', message);
+    }
   }
 
   function renderBatch(data) {
@@ -255,15 +289,18 @@ FRONTEND_COMPAT_JS = r"""(() => {
     if (data.excel_ready && data.excel_download_url) {
       const download = element('a', 'DESCARGAR EXCEL');
       download.href = data.excel_download_url;
-      download.style.display = 'inline-block';
-      download.style.padding = '9px 14px';
-      download.style.border = '1px solid currentColor';
-      download.style.borderRadius = '8px';
-      download.style.fontWeight = '700';
-      download.style.textDecoration = 'none';
+      styleAction(download);
       footer.appendChild(download);
     } else if (clean(data.state).toUpperCase() === 'RUNNING') {
       footer.appendChild(element('span', 'El Excel se generará automáticamente al terminar el lote.'));
+    }
+
+    if (errors > 0 && data.excel_ready && data.job_id && clean(data.state).toUpperCase() !== 'RUNNING') {
+      const retry = element('button', 'REINTENTAR FALLIDOS');
+      retry.type = 'button';
+      styleAction(retry);
+      retry.addEventListener('click', () => retryFailedBatch(data, retry));
+      footer.appendChild(retry);
     }
 
     if (data.error) {
@@ -341,7 +378,7 @@ FRONTEND_COMPAT_JS = r"""(() => {
     const target = args[0];
     const url = typeof target === 'string' ? target : ((target && target.url) || '');
     const response = await ORIGINAL_FETCH(...args);
-    if (url.includes('/api/run/characteristics')) {
+    if (url.includes('/api/run/characteristics') || url.includes('/retry-failed')) {
       observeCharacteristicsResponse(response);
     }
     return response;
@@ -363,13 +400,11 @@ FRONTEND_COMPAT_JS = r"""(() => {
     }
 
     if (replaying || !isCharacteristics() || label !== 'INVESTIGAR') return;
-
     const input = findIdentifierInput();
     if (!input || clean(input.value)) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
-
     setNativeValue(input, SENTINEL);
     notifyReact(input);
     replaying = true;
