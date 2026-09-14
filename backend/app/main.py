@@ -51,6 +51,8 @@ async def _stream_job(kind: str, runner: Callable, *args, job=None):
     job = job or STORE.create(kind)
     queue: asyncio.Queue[dict] = asyncio.Queue()
     loop = asyncio.get_running_loop()
+    STORE.mark_running(job.id)
+
     def emit(percent: int, step: str, message: str, category: str = 'PROCESO', detail: str = ''):
         event = ProgressEvent(percent, step, message, category, detail).to_dict()
         try:
@@ -60,13 +62,18 @@ async def _stream_job(kind: str, runner: Callable, *args, job=None):
                 loop.call_soon_threadsafe(queue.put_nowait, event)
         except RuntimeError:
             loop.call_soon_threadsafe(queue.put_nowait, event)
+
     async def work():
         try:
             await queue.put({'type': 'start', 'job_id': job.id, 'kind': kind})
             result = await runner(job, *args, emit)
+            STORE.set_public_data(job.id, result if isinstance(result, dict) else {'result': result})
+            STORE.mark_completed(job.id)
             await queue.put({'type': 'result', 'percent': 100, 'job_id': job.id, 'data': result})
         except Exception as exc:
+            STORE.mark_error(job.id, str(exc))
             await queue.put({'type': 'error', 'job_id': job.id, 'message': str(exc)})
+
     task = asyncio.create_task(work())
     while True:
         event = await queue.get()
@@ -79,10 +86,15 @@ async def _stream_job(kind: str, runner: Callable, *args, job=None):
 async def template_inspect(identifier: str = Form(''), template: UploadFile = File(...)):
     identifier = normalize_frontend_identifier(identifier)
     job = STORE.create('inspect')
+    STORE.mark_running(job.id)
     path = await _save_upload(template, job.directory)
     try:
-        return inspect_template(path, identifier)
+        result = inspect_template(path, identifier)
+        STORE.set_public_data(job.id, result)
+        STORE.mark_completed(job.id)
+        return result
     except Exception as exc:
+        STORE.mark_error(job.id, str(exc))
         raise HTTPException(400, str(exc))
 
 @app.post('/api/run/characteristics')
@@ -111,11 +123,54 @@ def _job_or_404(job_id: str):
     try: return STORE.get(job_id)
     except KeyError: raise HTTPException(404, 'El trabajo ya no existe o expiró. Vuelve a ejecutar la búsqueda.')
 
+
+def _existing_artifact(job, name: str) -> Path | None:
+    path = job.artifacts.get(name)
+    if path is None:
+        return None
+    path = Path(path)
+    return path if path.exists() and path.is_file() else None
+
+
+def _job_status_payload(job) -> dict:
+    data = dict(job.public_data or {})
+    excel = _existing_artifact(job, 'excel')
+    data.update({
+        'job_id': job.id,
+        'kind': job.kind,
+        'state': job.state,
+        'created_at': job.created_at.isoformat(),
+        'updated_at': job.updated_at.isoformat(),
+        'finished_at': job.finished_at.isoformat() if job.finished_at else None,
+        'error': job.error or data.get('error', ''),
+        'products': list(data.get('products') or []),
+        'product_count': int(data.get('product_count') or len(data.get('products') or [])),
+        'excel_ready': bool(excel),
+        'excel_download_url': f'/api/jobs/{job.id}/excel' if excel else data.get('excel_download_url'),
+        'artifacts': {
+            name: bool(_existing_artifact(job, name))
+            for name in job.artifacts
+        },
+    })
+    return data
+
+
+@app.get('/api/jobs/{job_id}')
+async def job_status(job_id: str):
+    return _job_status_payload(_job_or_404(job_id))
+
+
+@app.get('/api/jobs/{job_id}/excel')
 @app.post('/api/jobs/{job_id}/excel')
 async def excel_artifact(job_id: str):
     job = _job_or_404(job_id)
-    try: path = await asyncio.to_thread(generate_excel, job)
-    except Exception as exc: raise HTTPException(400, str(exc))
+    path = _existing_artifact(job, 'excel')
+    if path is None:
+        try:
+            path = await asyncio.to_thread(generate_excel, job)
+            STORE.add_artifact(job.id, 'excel', path)
+        except Exception as exc:
+            raise HTTPException(400, str(exc))
     return FileResponse(path, filename=path.name, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 @app.post('/api/jobs/{job_id}/prices.xlsx')
