@@ -33,3 +33,4 @@ jobs:
         run: |
           python -m unittest backend.tests.test_job_store_lifecycle -v
           python -m unittest backend.tests.test_characteristics_batch_state -v
+          python -m unittest backend.tests.test_job_status_api -v
