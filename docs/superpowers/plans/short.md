@@ -1,0 +1,1 @@
+Resilient batch implementation plan.
