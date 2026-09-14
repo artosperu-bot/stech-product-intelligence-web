@@ -71,7 +71,7 @@ FRONTEND_COMPAT_JS = r"""(() => {
 
   function statusLabel(status) {
     const normalized = clean(status).toUpperCase();
-    if (normalized === 'PENDING') return 'PENDIENTE';
+    if (normalized === 'CREATED' || normalized === 'PENDING') return 'PENDIENTE';
     if (normalized === 'RUNNING') return 'INVESTIGANDO';
     if (normalized === 'COMPLETED') return 'COMPLETADO';
     if (normalized === 'ERROR') return 'ERROR';
@@ -386,10 +386,26 @@ FRONTEND_COMPAT_JS = r"""(() => {
 
   function refreshCompatibility() {
     applyCharacteristicsCopy();
-    if (lastBatchData) renderBatch(lastBatchData);
+    if (!lastBatchData) return;
+
+    const panel = document.getElementById(BATCH_PANEL_ID);
+    if (!isCharacteristics()) {
+      if (panel) panel.style.display = 'none';
+      return;
+    }
+    if (!panel || panel.style.display === 'none') renderBatch(lastBatchData);
   }
 
-  const observer = new MutationObserver(refreshCompatibility);
+  const observer = new MutationObserver((mutations) => {
+    const meaningful = mutations.some((mutation) => {
+      const target = mutation.target;
+      if (target && target.nodeType === 1 && target.closest && target.closest(`#${BATCH_PANEL_ID}`)) {
+        return false;
+      }
+      return true;
+    });
+    if (meaningful) refreshCompatibility();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   refreshCompatibility();
 
