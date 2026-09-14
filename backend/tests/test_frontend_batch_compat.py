@@ -17,6 +17,12 @@ class FrontendBatchCompatTests(unittest.TestCase):
         self.assertIn('COMPLETADO', FRONTEND_COMPAT_JS)
         self.assertIn('v=2', FRONTEND_COMPAT_SRC)
 
+    def test_partial_batch_exposes_retry_failed_action_and_observes_retry_stream(self):
+        self.assertIn('REINTENTAR FALLIDOS', FRONTEND_COMPAT_JS)
+        self.assertIn('/retry-failed', FRONTEND_COMPAT_JS)
+        self.assertIn("method: 'POST'", FRONTEND_COMPAT_JS)
+        self.assertIn("url.includes('/retry-failed')", FRONTEND_COMPAT_JS)
+
 
 if __name__ == '__main__':
     unittest.main()
