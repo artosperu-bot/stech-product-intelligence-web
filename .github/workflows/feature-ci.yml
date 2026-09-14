@@ -1,0 +1,71 @@
+name: Feature CI
+
+on:
+  push:
+    branches:
+      - feat/resilient-batch-research
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Restore legacy core used by production image
+        run: |
+          cat legacy_core_bundle_v2/part-*.b64 | base64 -d > /tmp/legacy_core.tar.gz
+          tar -xzf /tmp/legacy_core.tar.gz -C .
+          test -f backend/legacy_core/chatgpt_browser.py
+      - name: Compile backend
+        env:
+          PYTHONPATH: backend:backend/legacy_core
+        run: python -m compileall -q backend/app backend/tests
+      - name: Run backend regression suite
+        env:
+          PYTHONPATH: backend:backend/legacy_core
+        run: |
+          python - <<'PY'
+          import pathlib
+          import sys
+          import unittest
+
+          root = pathlib.Path('backend/tests')
+          excluded = {'test_worker_fresh_chat.py'}
+          loader = unittest.TestLoader()
+          suite = unittest.TestSuite()
+          modules = []
+          for path in sorted(root.glob('test_*.py')):
+              if path.name in excluded:
+                  continue
+              module = f'backend.tests.{path.stem}'
+              modules.append(module)
+              suite.addTests(loader.loadTestsFromName(module))
+
+          print('Regression modules:', len(modules))
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          sys.exit(0 if result.wasSuccessful() else 1)
+          PY
+      - name: Run resilient batch critical tests explicitly
+        env:
+          PYTHONPATH: backend:backend/legacy_core
+        run: |
+          python -m unittest \
+            backend.tests.test_job_store_lifecycle \
+            backend.tests.test_characteristics_batch_state \
+            backend.tests.test_job_status_api \
+            backend.tests.test_retry_failed_batch \
+            backend.tests.test_frontend_batch_compat \
+            backend.tests.test_frontend_compat \
+            backend.tests.test_marketplace_workbook \
+            -v

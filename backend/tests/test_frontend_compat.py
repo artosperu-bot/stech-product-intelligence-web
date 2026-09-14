@@ -3,6 +3,7 @@ import unittest
 from app.frontend_compat import (
     AUTO_IDENTIFIER_SENTINEL,
     FRONTEND_COMPAT_JS,
+    FRONTEND_COMPAT_SRC,
     inject_frontend_compat,
     normalize_frontend_identifier,
 )
@@ -16,8 +17,8 @@ class FrontendCompatTests(unittest.TestCase):
     def test_injects_script_once_before_body_close(self):
         html = '<html><body><div id="root"></div></body></html>'
         patched = inject_frontend_compat(html)
-        self.assertIn('/stech-auto-identifier.js?v=1', patched)
-        self.assertLess(patched.index('/stech-auto-identifier.js?v=1'), patched.index('</body>'))
+        self.assertIn(FRONTEND_COMPAT_SRC, patched)
+        self.assertLess(patched.index(FRONTEND_COMPAT_SRC), patched.index('</body>'))
         self.assertEqual(inject_frontend_compat(patched), patched)
 
     def test_script_is_scoped_to_characteristics_and_replays_investigate(self):
