@@ -99,6 +99,47 @@ def _product_pct(local_pct: int, index: int, total: int) -> int:
     return min(90, start + int((end - start) * normalized))
 
 
+def _set_job_public_data(job, data: dict) -> None:
+    setter = getattr(job, 'set_public_data', None)
+    if callable(setter):
+        setter(data)
+    else:
+        job.public_data = data
+
+
+def _add_job_artifact(job, name: str, path: Path) -> None:
+    adder = getattr(job, 'add_artifact', None)
+    if callable(adder):
+        adder(name, path)
+        return
+    artifacts = getattr(job, 'artifacts', None)
+    if artifacts is None:
+        artifacts = {}
+        job.artifacts = artifacts
+    artifacts[str(name)] = Path(path)
+
+
+def _batch_public_payload(job_id: str, products: list[dict], **extra) -> dict:
+    completed = sum(1 for item in products if item.get('status') == 'COMPLETED')
+    errors = sum(1 for item in products if item.get('status') == 'ERROR')
+    running = sum(1 for item in products if item.get('status') == 'RUNNING')
+    pending = sum(1 for item in products if item.get('status') == 'PENDING')
+    payload = {
+        'job_id': job_id,
+        'product_count': len(products),
+        'completed_count': completed,
+        'error_count': errors,
+        'running_count': running,
+        'pending_count': pending,
+        'partial': errors > 0,
+        'products': products,
+        'excel_ready': False,
+        'excel_download_url': None,
+    }
+    payload.update(extra)
+    return payload
+
+
 async def run_characteristics(job, identifier: str | None, template_path: Path, emit):
     emit(8, '1/7', 'Preparando plantilla', 'EXCEL')
     try:
@@ -122,81 +163,148 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
     total_products = len(slots)
     emit(10, '1/7', f'{total_products} producto(s) detectado(s) para investigación', 'IDENTIDAD')
     product_runs: list[dict] = []
+    batch_products: list[dict] = []
+
+    for slot in slots:
+        current_identifier = resolved.identifier if slot is None else slot.identifier
+        current_type = resolved.identifier_type if slot is None else slot.identifier_type
+        current_row = resolved.source_row if slot is None else slot.row
+        batch_products.append({
+            'source_row': current_row,
+            'detected_identifier': current_identifier,
+            'identifier_type': current_type,
+            'category': '' if slot is None else getattr(slot, 'category', ''),
+            'status': 'PENDING',
+            'error': '',
+            'product': {},
+            'accepted_count': 0,
+            'total_count': 0,
+            'rejected_count': 0,
+            'followup_performed': False,
+            'preview': [],
+            'identity': {},
+            'qa_ready': False,
+            'qa_warnings': [],
+            'prompt_contract_chars': 0,
+        })
+
+    _set_job_public_data(job, _batch_public_payload(job.id, batch_products))
 
     for index, slot in enumerate(slots, start=1):
         current_identifier = resolved.identifier if slot is None else slot.identifier
         current_type = resolved.identifier_type if slot is None else slot.identifier_type
         current_row = resolved.source_row if slot is None else slot.row
+        public_item = batch_products[index - 1]
+        public_item['status'] = 'RUNNING'
+        _set_job_public_data(job, _batch_public_payload(job.id, batch_products))
+
         emit(
             11 + int(5 * ((index - 1) / max(1, total_products))),
             '1/7',
             f'Producto {index}/{total_products} | fila {current_row or "-"} | {current_type}: {current_identifier}',
             'IDENTIDAD',
         )
-        prep = prepare_research(template_path, current_identifier)
-        prompt_context = ''
-        if profile is not None and slot is not None:
-            prompt_context = build_marketplace_prompt_contract(
-                profile,
-                slot,
-                research_field_names=[field.original_name for field in prep.schema.research_fields],
-            )
+
+        try:
+            prep = prepare_research(template_path, current_identifier)
+            prompt_context = ''
+            if profile is not None and slot is not None:
+                prompt_context = build_marketplace_prompt_contract(
+                    profile,
+                    slot,
+                    research_field_names=[field.original_name for field in prep.schema.research_fields],
+                )
+                emit(
+                    13 + int(4 * ((index - 1) / max(1, total_products))),
+                    '1/7',
+                    f'Producto {index}/{total_products}: reglas dinámicas de {profile.marketplace} incorporadas al prompt ({len(prompt_context)} caracteres)',
+                    'PLANTILLA',
+                )
             emit(
-                13 + int(4 * ((index - 1) / max(1, total_products))),
+                14 + int(4 * ((index - 1) / max(1, total_products))),
                 '1/7',
-                f'Producto {index}/{total_products}: reglas dinámicas de {profile.marketplace} incorporadas al prompt ({len(prompt_context)} caracteres)',
-                'PLANTILLA',
+                f'Producto {index}/{total_products}: {prep.researchable_count} campos investigables detectados',
+                'EXCEL',
             )
-        emit(
-            14 + int(4 * ((index - 1) / max(1, total_products))),
-            '1/7',
-            f'Producto {index}/{total_products}: {prep.researchable_count} campos investigables detectados',
-            'EXCEL',
-        )
 
-        def progress(message: str, *, _index=index):
-            pct, step, label = _stage_for_message('characteristics', message)
-            emit(_product_pct(pct, _index, total_products), step, f'Producto {_index}/{total_products}: {message}', label)
+            def progress(message: str, *, _index=index):
+                pct, step, label = _stage_for_message('characteristics', message)
+                emit(_product_pct(pct, _index, total_products), step, f'Producto {_index}/{total_products}: {message}', label)
 
-        emit(_product_pct(20, index, total_products), '2/7', f'Producto {index}/{total_products}: iniciando sesión de investigación ChatGPT', 'NAVEGADOR')
-        async with chatgpt_session(
-            progress=progress,
-            research_kind='characteristics',
-            prompt_context=prompt_context,
-        ) as session:
-            result = await run_research_for_preview_once(
-                prep,
-                session.ask,
-                min_confidence=80,
-                output_dir=job.directory,
+            emit(_product_pct(20, index, total_products), '2/7', f'Producto {index}/{total_products}: iniciando sesión de investigación ChatGPT', 'NAVEGADOR')
+            async with chatgpt_session(
                 progress=progress,
+                research_kind='characteristics',
+                prompt_context=prompt_context,
+            ) as session:
+                result = await run_research_for_preview_once(
+                    prep,
+                    session.ask,
+                    min_confidence=80,
+                    output_dir=job.directory,
+                    progress=progress,
+                )
+
+            rows = build_preview_rows(prep, result.validation)
+            raw = result.validation.raw if isinstance(result.validation.raw, dict) else {}
+            product = raw.get('producto') or {}
+            intelligence = build_product_intelligence(
+                raw,
+                template_path,
+                current_identifier,
+                min_confidence=80,
+            )
+            qa_warnings = intelligence.evidence_errors + intelligence.critical_errors
+            runtime_item = {
+                'slot': slot,
+                'preparation': prep,
+                'validation': result.validation,
+                'rows': rows,
+                'product': product,
+                'raw_paths': result.raw_paths,
+                'identifier': current_identifier,
+                'identifier_type': current_type,
+                'source_row': current_row,
+                'canonical_identity': intelligence.identity,
+                'master_specifications': intelligence.specifications,
+                'qa_warnings': qa_warnings,
+                'followup_performed': bool(result.followup_performed),
+                'prompt_contract_chars': len(prompt_context),
+            }
+            product_runs.append(runtime_item)
+            public_item.update({
+                'status': 'COMPLETED',
+                'error': '',
+                'product': product,
+                'accepted_count': len(result.validation.accepted),
+                'total_count': prep.researchable_count,
+                'rejected_count': len(result.validation.rejected),
+                'followup_performed': bool(result.followup_performed),
+                'preview': [serialize_preview_row(row) for row in rows],
+                'identity': serialize_identity(intelligence.identity),
+                'qa_ready': not qa_warnings,
+                'qa_warnings': qa_warnings,
+                'prompt_contract_chars': len(prompt_context),
+            })
+        except Exception as exc:
+            public_item.update({
+                'status': 'ERROR',
+                'error': str(exc),
+                'qa_ready': False,
+            })
+            emit(
+                _product_pct(80, index, total_products),
+                '5/7',
+                f'Producto {index}/{total_products}: error aislado: {exc}',
+                'ERROR',
             )
 
-        rows = build_preview_rows(prep, result.validation)
-        raw = result.validation.raw if isinstance(result.validation.raw, dict) else {}
-        product = raw.get('producto') or {}
-        intelligence = build_product_intelligence(
-            raw,
-            template_path,
-            current_identifier,
-            min_confidence=80,
-        )
-        product_runs.append({
-            'slot': slot,
-            'preparation': prep,
-            'validation': result.validation,
-            'rows': rows,
-            'product': product,
-            'raw_paths': result.raw_paths,
-            'identifier': current_identifier,
-            'identifier_type': current_type,
-            'source_row': current_row,
-            'canonical_identity': intelligence.identity,
-            'master_specifications': intelligence.specifications,
-            'qa_warnings': intelligence.evidence_errors + intelligence.critical_errors,
-            'followup_performed': bool(result.followup_performed),
-            'prompt_contract_chars': len(prompt_context),
-        })
+        _set_job_public_data(job, _batch_public_payload(job.id, batch_products))
+
+    if not product_runs:
+        message = 'No se pudo completar ningún producto del lote.'
+        _set_job_public_data(job, _batch_public_payload(job.id, batch_products, message=message))
+        raise RuntimeError(message)
 
     emit(92, '6/7', f'Preparando vista previa validada de {total_products} producto(s)', 'VALIDACIÓN')
     first = product_runs[0]
@@ -222,25 +330,9 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
         'characteristic_products': product_runs,
     }
 
-    serialized_products = []
-    for item in product_runs:
-        serialized_products.append({
-            'source_row': item['source_row'],
-            'detected_identifier': item['identifier'],
-            'identifier_type': item['identifier_type'],
-            'product': item['product'],
-            'accepted_count': len(item['validation'].accepted),
-            'total_count': item['preparation'].researchable_count,
-            'rejected_count': len(item['validation'].rejected),
-            'followup_performed': item['followup_performed'],
-            'preview': [serialize_preview_row(row) for row in item['rows']],
-            'identity': serialize_identity(item['canonical_identity']),
-            'qa_ready': not item['qa_warnings'],
-            'qa_warnings': item['qa_warnings'],
-            'prompt_contract_chars': item.get('prompt_contract_chars', 0),
-        })
-
-    return {
+    completed_count = sum(1 for item in batch_products if item['status'] == 'COMPLETED')
+    error_count = sum(1 for item in batch_products if item['status'] == 'ERROR')
+    final_result = {
         'job_id': job.id,
         'product': first['product'],
         'accepted_count': sum(len(item['validation'].accepted) for item in product_runs),
@@ -252,12 +344,33 @@ async def run_characteristics(job, identifier: str | None, template_path: Path, 
         'detected_identifier': first['identifier'],
         'identifier_type': first['identifier_type'],
         'identity': serialize_identity(first['canonical_identity']),
-        'qa_ready': all(not item['qa_warnings'] for item in product_runs),
+        'qa_ready': error_count == 0 and all(not item['qa_warnings'] for item in product_runs),
         'qa_warnings': [warning for item in product_runs for warning in item['qa_warnings']],
         'marketplace': profile.marketplace if profile is not None else '',
         'product_count': total_products,
-        'products': serialized_products,
+        'completed_count': completed_count,
+        'error_count': error_count,
+        'partial': error_count > 0,
+        'products': batch_products,
+        'excel_ready': False,
+        'excel_download_url': None,
     }
+    _set_job_public_data(job, final_result)
+
+    if callable(getattr(job, 'add_artifact', None)):
+        emit(96, '7/7', 'Generando Excel automáticamente', 'EXCEL')
+        try:
+            excel_path = await asyncio.to_thread(generate_excel, job)
+            _add_job_artifact(job, 'excel', excel_path)
+            final_result['excel_ready'] = Path(excel_path).exists()
+            final_result['excel_download_url'] = f'/api/jobs/{job.id}/excel'
+        except Exception as exc:
+            final_result['excel_error'] = str(exc)
+            _set_job_public_data(job, final_result)
+            raise
+
+    _set_job_public_data(job, final_result)
+    return final_result
 
 
 async def run_prices(job, identifier: str, emit):
