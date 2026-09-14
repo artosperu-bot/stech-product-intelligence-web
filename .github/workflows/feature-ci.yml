@@ -27,7 +27,7 @@ jobs:
           cat legacy_core_bundle_v2/part-*.b64 | base64 -d > /tmp/legacy_core.tar.gz
           tar -xzf /tmp/legacy_core.tar.gz -C .
           test -f backend/legacy_core/chatgpt_browser.py
-      - name: Run focused retry test
+      - name: Run focused retry UI test
         env:
           PYTHONPATH: backend:backend/legacy_core
-        run: python -m unittest backend.tests.test_retry_failed_batch -v
+        run: python -m unittest backend.tests.test_frontend_batch_compat -v
