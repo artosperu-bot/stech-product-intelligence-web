@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+import shutil
 from typing import Callable, Awaitable
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -155,9 +156,141 @@ def _job_status_payload(job) -> dict:
     return data
 
 
+class _RetryStepJob:
+    """Ephemeral adapter so a retry step can reuse the characteristics workflow
+    without replacing the parent retry job's persisted batch status."""
+
+    def __init__(self, job_id: str, directory: Path):
+        self.id = job_id
+        self.directory = Path(directory)
+        self.payload: dict = {}
+        self.public_data: dict = {}
+        self.artifacts: dict[str, Path] = {}
+
+    def set_public_data(self, data: dict) -> None:
+        self.public_data = dict(data or {})
+
+    def add_artifact(self, name: str, path: Path) -> None:
+        self.artifacts[str(name)] = Path(path)
+
+
+def _retry_public_payload(job, source_job_id: str, products: list[dict], excel_path: Path | None) -> dict:
+    completed = sum(1 for item in products if str(item.get('status') or '').upper() == 'COMPLETED')
+    errors = sum(1 for item in products if str(item.get('status') or '').upper() == 'ERROR')
+    running = sum(1 for item in products if str(item.get('status') or '').upper() == 'RUNNING')
+    pending = sum(1 for item in products if str(item.get('status') or '').upper() == 'PENDING')
+    ready = bool(excel_path and Path(excel_path).exists())
+    return {
+        'job_id': job.id,
+        'retry_of': source_job_id,
+        'product_count': len(products),
+        'completed_count': completed,
+        'error_count': errors,
+        'running_count': running,
+        'pending_count': pending,
+        'partial': errors > 0,
+        'products': products,
+        'excel_ready': ready,
+        'excel_download_url': f'/api/jobs/{job.id}/excel' if ready else None,
+    }
+
+
+async def _run_retry_failed(job, source_job_id: str, emit):
+    source = _job_or_404(source_job_id)
+    source_data = _job_status_payload(source)
+    products = [dict(item) for item in (source_data.get('products') or [])]
+    failed_indices = [
+        index for index, item in enumerate(products)
+        if str(item.get('status') or '').upper() == 'ERROR'
+    ]
+    source_excel = _existing_artifact(source, 'excel')
+    if source_excel is None:
+        raise RuntimeError('No existe un Excel parcial recuperable para reintentar los productos fallidos.')
+
+    base_name = Path(source_excel).name
+    current_excel = job.directory / f'retry_base_{base_name}'
+    await asyncio.to_thread(shutil.copy2, source_excel, current_excel)
+    job.add_artifact('excel', current_excel)
+    job.set_public_data(_retry_public_payload(job, source_job_id, products, current_excel))
+
+    if not failed_indices:
+        emit(100, '1/1', 'No hay productos fallidos para reintentar', 'REINTENTO')
+        return _retry_public_payload(job, source_job_id, products, current_excel)
+
+    total = len(failed_indices)
+    for position, product_index in enumerate(failed_indices, start=1):
+        item = products[product_index]
+        identifier = str(item.get('detected_identifier') or item.get('identifier') or '').strip()
+        if not identifier:
+            item['status'] = 'ERROR'
+            item['error'] = 'No se pudo determinar el identificador del producto para el reintento.'
+            job.set_public_data(_retry_public_payload(job, source_job_id, products, current_excel))
+            continue
+
+        item['status'] = 'RUNNING'
+        item['error'] = ''
+        job.set_public_data(_retry_public_payload(job, source_job_id, products, current_excel))
+        emit(
+            5 + int(85 * ((position - 1) / max(1, total))),
+            f'{position}/{total}',
+            f'Reintentando {identifier} ({position}/{total})',
+            'REINTENTO',
+        )
+
+        input_path = job.directory / f'retry_input_{position:02d}.xlsx'
+        await asyncio.to_thread(shutil.copy2, current_excel, input_path)
+        step_job = _RetryStepJob(job.id, job.directory)
+
+        def step_emit(percent: int, step: str, message: str, category: str = 'PROCESO', detail: str = ''):
+            start = 5 + int(85 * ((position - 1) / max(1, total)))
+            end = 5 + int(85 * (position / max(1, total)))
+            scaled = start + int((end - start) * max(0, min(100, int(percent))) / 100)
+            emit(scaled, f'{position}/{total}', f'{identifier}: {message}', category, detail)
+
+        try:
+            result = await run_characteristics(step_job, identifier, input_path, step_emit)
+            retry_products = list(result.get('products') or [])
+            retry_item = dict(retry_products[0]) if retry_products else dict(item)
+            retry_item['status'] = 'COMPLETED'
+            retry_item['error'] = ''
+            products[product_index] = retry_item
+            step_excel = step_job.artifacts.get('excel')
+            if step_excel is not None and Path(step_excel).exists():
+                current_excel = Path(step_excel)
+                job.add_artifact('excel', current_excel)
+        except Exception as exc:
+            item['status'] = 'ERROR'
+            item['error'] = f'Reintento fallido: {exc}'
+            products[product_index] = item
+
+        job.set_public_data(_retry_public_payload(job, source_job_id, products, current_excel))
+
+    final = _retry_public_payload(job, source_job_id, products, current_excel)
+    emit(96, 'FINAL', 'Reintento finalizado; preparando Excel recuperado', 'REINTENTO')
+    job.add_artifact('excel', current_excel)
+    job.set_public_data(final)
+    return final
+
+
 @app.get('/api/jobs/{job_id}')
 async def job_status(job_id: str):
     return _job_status_payload(_job_or_404(job_id))
+
+
+@app.post('/api/jobs/{job_id}/retry-failed')
+async def retry_failed_artifact(job_id: str):
+    source = _job_or_404(job_id)
+    data = _job_status_payload(source)
+    failed = [item for item in data.get('products', []) if str(item.get('status') or '').upper() == 'ERROR']
+    if not failed:
+        raise HTTPException(400, 'Este trabajo no tiene productos fallidos para reintentar.')
+    if _existing_artifact(source, 'excel') is None:
+        raise HTTPException(400, 'No existe un Excel parcial para conservar los productos ya completados.')
+    retry_job = STORE.create('characteristics-retry')
+    return StreamingResponse(
+        _stream_job('characteristics-retry', _run_retry_failed, job_id, job=retry_job),
+        media_type='application/x-ndjson',
+    )
 
 
 @app.get('/api/jobs/{job_id}/excel')
