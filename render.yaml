@@ -17,7 +17,7 @@ services:
       - key: STECH_RUNTIME_DIR
         value: /tmp/stech-product-intelligence
       - key: ARTIFACT_TTL_MINUTES
-        value: "20"
+        value: "1440"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: MALLOC_ARENA_MAX
