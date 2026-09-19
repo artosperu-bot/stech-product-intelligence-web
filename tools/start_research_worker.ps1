@@ -32,10 +32,15 @@ Write-Host " STECH V7 RESEARCH WORKER"
 Write-Host "============================================================"
 Write-Host "Render : $Server"
 Write-Host "Repo   : $RepoRoot"
-Write-Host "Token  : válido (longitud $($Token.Length), valor oculto)"
+Write-Host "Token  : OK (longitud $($Token.Length), valor oculto)"
 Write-Host "Browser: Microsoft Edge dedicado"
 Write-Host "Perfil : C:\STECH_CHATGPT_EDGE"
 Write-Host "CDP    : http://127.0.0.1:9223"
+
+$Commit = (& git rev-parse --short HEAD 2>$null)
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($Commit)) {
+    Write-Host "Commit : $Commit"
+}
 
 py -c "import playwright, httpx" 2>$null
 if ($LASTEXITCODE -ne 0) {
