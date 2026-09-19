@@ -4,6 +4,11 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+try {
+    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    $OutputEncoding = [Console]::OutputEncoding
+} catch {}
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
@@ -28,6 +33,9 @@ Write-Host "============================================================"
 Write-Host "Render : $Server"
 Write-Host "Repo   : $RepoRoot"
 Write-Host "Token  : válido (longitud $($Token.Length), valor oculto)"
+Write-Host "Browser: Microsoft Edge dedicado"
+Write-Host "Perfil : C:\STECH_CHATGPT_EDGE"
+Write-Host "CDP    : http://127.0.0.1:9223"
 
 py -c "import playwright, httpx" 2>$null
 if ($LASTEXITCODE -ne 0) {
