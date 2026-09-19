@@ -36,6 +36,7 @@ from app.remote_protocol import decode_remote_value
 from app.worker_chat_policy import (
     WorkerChatRouter,
     composer_has_unsent_prompt,
+    ensure_chatgpt_composer_alias,
     pop_remote_context,
     prepare_chatgpt_composer,
 )
@@ -198,19 +199,27 @@ async def chatgpt_page_diagnostics(page) -> str:
             """() => {
               const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
               const title = document.title || '';
-              const editable = [...document.querySelectorAll('[contenteditable="true"], textarea')]
+              const editables = [...document.querySelectorAll('[contenteditable="true"], textarea')]
                 .filter(el => {
                   const r = el.getBoundingClientRect();
                   const st = getComputedStyle(el);
                   return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
-                }).length;
+                });
               const prompt = document.querySelectorAll('#prompt-textarea').length;
-              return { title, prompt, editable, sample: body.slice(0, 280) };
+              const details = editables.slice(-5).map(el => ({
+                tag: el.tagName,
+                id: el.id || '',
+                role: el.getAttribute('role') || '',
+                placeholder: el.getAttribute('placeholder') || el.getAttribute('data-placeholder') || '',
+                contenteditable: el.getAttribute('contenteditable') || '',
+              }));
+              return { title, prompt, editable: editables.length, details, sample: body.slice(0, 280) };
             }"""
         )
         return (
             f"title={data.get('title')!r}; prompt={data.get('prompt')}; "
-            f"editables={data.get('editable')}; sample={data.get('sample')!r}"
+            f"editables={data.get('editable')}; detalles={data.get('details')}; "
+            f"sample={data.get('sample')!r}"
         )
     except Exception as exc:
         return f"diagnóstico no disponible: {type(exc).__name__}: {exc}"
@@ -501,6 +510,13 @@ async def load_session_class():
     from chatgpt_browser import ChatGPTBrowserSession
 
     class ExistingEdgeChatGPTSession(ChatGPTBrowserSession):
+        async def ask(self, *args, **kwargs):
+            # ChatGPT periodically changes the composer DOM. Re-apply the
+            # compatibility alias immediately before legacy V30 touches it.
+            if self.page is not None:
+                await ensure_chatgpt_composer_alias(self.page)
+            return await super().ask(*args, **kwargs)
+
         async def __aenter__(self):
             self._playwright = await async_playwright().start()
             self.browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
@@ -572,7 +588,7 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
                 try:
                     response = await client.post(
                         f"{server}/api/research-worker/claim",
-                        json={"worker_id": worker_id, "wait_seconds": 20},
+                        json={"worker_id": worker_id, "wait_seconds": 8},
                     )
                     if response.status_code == 204:
                         print("[WORKER] listo | sin trabajos", flush=True)
