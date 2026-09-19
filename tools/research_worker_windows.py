@@ -62,12 +62,12 @@ def ensure_legacy_core() -> None:
     print("[CORE] legacy_core sincronizado desde el bundle versionado.", flush=True)
 
 
-def chrome_candidates() -> list[Path]:
+def edge_candidates() -> list[Path]:
     candidates = []
-    for key in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+    for key in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
         base = os.getenv(key)
         if base:
-            candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+            candidates.append(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe")
     return candidates
 
 
@@ -80,34 +80,73 @@ def cdp_alive(cdp_url: str) -> bool:
         return False
 
 
-def ensure_chrome(cdp_url: str, profile_dir: Path) -> None:
+def ensure_edge(cdp_url: str, profile_dir: Path) -> None:
     if cdp_alive(cdp_url):
-        print(f"[CHROME] CDP disponible: {cdp_url}")
+        print(f"[EDGE] CDP disponible: {cdp_url}")
         return
-    chrome = next((p for p in chrome_candidates() if p.exists()), None)
-    if chrome is None:
-        raise RuntimeError("No encontré Google Chrome instalado en Windows.")
+    edge = next((p for p in edge_candidates() if p.exists()), None)
+    if edge is None:
+        raise RuntimeError("No encontré Microsoft Edge instalado en Windows.")
     profile_dir.mkdir(parents=True, exist_ok=True)
-    print(f"[CHROME] Iniciando Chrome real con perfil: {profile_dir}")
+    parsed_port = cdp_url.rstrip("/").rsplit(":", 1)[-1]
+    try:
+        port = int(parsed_port)
+    except ValueError as exc:
+        raise RuntimeError(f"CDP de Edge inválido: {cdp_url}") from exc
+    print(f"[EDGE] Iniciando Edge dedicado con perfil: {profile_dir}")
     subprocess.Popen(
         [
-            str(chrome),
-            "--remote-debugging-port=9222",
+            str(edge),
+            f"--remote-debugging-port={port}",
             f"--user-data-dir={profile_dir}",
+            "--no-first-run",
+            "--no-default-browser-check",
             "https://chatgpt.com/",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    for _ in range(30):
+    for _ in range(60):
         if cdp_alive(cdp_url):
+            print(f"[EDGE] CDP listo: {cdp_url}")
             return
         time.sleep(0.5)
-    raise RuntimeError("Chrome abrió pero CDP 9222 no respondió.")
+    raise RuntimeError(f"Edge abrió pero CDP {port} no respondió.")
 
 
 def json_safe(value):
     return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+
+
+async def navigate_chatgpt(page, attempts: int = 3):
+    """Navigate to ChatGPT without killing the worker on a slow DOMContentLoaded."""
+    timeout_ms = int(os.getenv("STECH_CHATGPT_NAV_TIMEOUT_MS", "120000"))
+    last_error = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            await page.goto(
+                "https://chatgpt.com/",
+                wait_until="commit",
+                timeout=timeout_ms,
+            )
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                # ChatGPT can keep background resources/navigation busy; a committed
+                # chatgpt.com page is enough because the composer readiness is checked later.
+                pass
+            if "chatgpt.com" in (page.url or ""):
+                return page
+        except Exception as exc:
+            last_error = exc
+            if "chatgpt.com" in (page.url or ""):
+                return page
+            if attempt < attempts:
+                await asyncio.sleep(min(2.0 * attempt, 5.0))
+    raise RuntimeError(
+        f"No se pudo abrir ChatGPT en Edge después de {attempts} intentos "
+        f"(timeout por intento: {timeout_ms} ms): {type(last_error).__name__}: {last_error}"
+    )
 
 
 async def recover_chatgpt_page(session):
@@ -120,21 +159,21 @@ async def recover_chatgpt_page(session):
 
     context = getattr(session, "context", None)
     if context is None:
-        raise RuntimeError("Chrome conectado pero el worker perdió el contexto de navegador.")
+        raise RuntimeError("Edge conectado pero el worker perdió el contexto de navegador.")
 
     for candidate in list(context.pages):
         try:
             if not candidate.is_closed() and "chatgpt.com" in (candidate.url or ""):
                 session.page = candidate
-                session._note("Pestaña ChatGPT recuperada desde Chrome real.")
+                session._note("Pestaña ChatGPT recuperada desde Edge dedicado.")
                 return candidate
         except Exception:
             continue
 
     page = await context.new_page()
-    await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+    await navigate_chatgpt(page)
     session.page = page
-    session._note("Nueva pestaña ChatGPT creada en Chrome real.")
+    session._note("Nueva pestaña ChatGPT creada en Edge dedicado.")
     return page
 
 
@@ -142,11 +181,11 @@ async def open_fresh_chat(session):
     """Start a clean ChatGPT conversation for a new research job or a retry."""
     page = await recover_chatgpt_page(session)
     try:
-        await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+        await navigate_chatgpt(page)
     except Exception:
         session.page = None
         page = await recover_chatgpt_page(session)
-        await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
+        await navigate_chatgpt(page)
     session.page = page
     session._note("Nuevo chat de ChatGPT listo para este trabajo de investigación.")
     return page
@@ -367,18 +406,18 @@ async def load_session_class():
         sys.path.insert(0, str(CORE_DIR))
     from chatgpt_browser import ChatGPTBrowserSession
 
-    class ExistingChromeChatGPTSession(ChatGPTBrowserSession):
+    class ExistingEdgeChatGPTSession(ChatGPTBrowserSession):
         async def __aenter__(self):
             self._playwright = await async_playwright().start()
             self.browser = await self._playwright.chromium.connect_over_cdp(self._cdp_url)
             if not self.browser.contexts:
-                raise RuntimeError("Chrome conectado por CDP pero no tiene contexto.")
+                raise RuntimeError("Edge conectado por CDP pero no tiene contexto.")
             self.context = self.browser.contexts[0]
             pages = [p for p in self.context.pages if "chatgpt.com" in p.url]
             self.page = pages[0] if pages else await self.context.new_page()
             self._owns_context = False
-            await self.page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60000)
-            self._note("Chrome real conectado por CDP.")
+            await navigate_chatgpt(self.page)
+            self._note("Edge dedicado conectado por CDP.")
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
@@ -387,11 +426,11 @@ async def load_session_class():
             self._playwright = self.browser = self.context = self.page = None
             self._owns_context = False
 
-    return ExistingChromeChatGPTSession
+    return ExistingEdgeChatGPTSession
 
 
 async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, profile_dir: Path) -> None:
-    ensure_chrome(cdp_url, profile_dir)
+    ensure_edge(cdp_url, profile_dir)
     SessionClass = await load_session_class()
     headers = {"Authorization": f"Bearer {token}"}
     server = server.rstrip("/")
@@ -488,12 +527,12 @@ async def run_worker(server: str, token: str, worker_id: str, cdp_url: str, prof
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="STECH V7 Research Worker - ChatGPT por Chrome real")
+    parser = argparse.ArgumentParser(description="STECH V7 Research Worker - ChatGPT por Microsoft Edge dedicado")
     parser.add_argument("--server", default=os.getenv("STECH_RENDER_URL", "https://stech-product-intelligence-web.onrender.com"))
     parser.add_argument("--token", default=os.getenv("STECH_RESEARCH_WORKER_TOKEN", ""))
     parser.add_argument("--worker-id", default=os.getenv("STECH_RESEARCH_WORKER_ID", socket.gethostname()))
-    parser.add_argument("--cdp", default=os.getenv("STECH_CHROME_CDP", "http://127.0.0.1:9222"))
-    parser.add_argument("--profile", default=os.getenv("STECH_CHROME_PROFILE", r"C:\STECH_CHATGPT_CHROME"))
+    parser.add_argument("--cdp", default=os.getenv("STECH_EDGE_CDP", "http://127.0.0.1:9223"))
+    parser.add_argument("--profile", default=os.getenv("STECH_EDGE_PROFILE", r"C:\STECH_CHATGPT_EDGE"))
     return parser.parse_args()
 
 
