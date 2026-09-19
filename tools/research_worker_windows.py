@@ -413,6 +413,7 @@ async def ask_in_job_chat_retry(
             page = await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
             await raise_if_chatgpt_usage_limited(page)
             await wait_for_chatgpt_ready(session)
+            page = await recover_chatgpt_page(session)
             await raise_if_chatgpt_usage_limited(page)
             session._note("Compositor real de ChatGPT estable y listo.")
             baseline_count = await assistant_message_count(session)
