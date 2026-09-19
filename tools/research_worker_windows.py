@@ -191,13 +191,106 @@ async def open_fresh_chat(session):
     return page
 
 
+async def chatgpt_page_diagnostics(page) -> str:
+    """Compact diagnostics for slow/login/challenge states without dumping page content."""
+    try:
+        data = await page.evaluate(
+            """() => {
+              const body = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+              const title = document.title || '';
+              const editable = [...document.querySelectorAll('[contenteditable="true"], textarea')]
+                .filter(el => {
+                  const r = el.getBoundingClientRect();
+                  const st = getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+                }).length;
+              const prompt = document.querySelectorAll('#prompt-textarea').length;
+              return { title, prompt, editable, sample: body.slice(0, 280) };
+            }"""
+        )
+        return (
+            f"title={data.get('title')!r}; prompt={data.get('prompt')}; "
+            f"editables={data.get('editable')}; sample={data.get('sample')!r}"
+        )
+    except Exception as exc:
+        return f"diagnóstico no disponible: {type(exc).__name__}: {exc}"
+
+
+async def wait_for_chatgpt_ready(session):
+    """Wait/recover/reload until the real ChatGPT composer is usable."""
+    total_seconds = float(os.getenv("STECH_CHATGPT_READY_TIMEOUT_SECONDS", "180"))
+    slice_seconds = float(os.getenv("STECH_CHATGPT_READY_SLICE_SECONDS", "30"))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(30.0, total_seconds)
+    attempt = 0
+    last_error = None
+
+    while loop.time() < deadline:
+        attempt += 1
+        page = await recover_chatgpt_page(session)
+        remaining = max(1.0, deadline - loop.time())
+        current_slice = min(max(5.0, slice_seconds), remaining)
+        try:
+            await raise_if_chatgpt_usage_limited(page)
+            composer = await prepare_chatgpt_composer(page, timeout_seconds=current_slice)
+            session._note(
+                f"Compositor de ChatGPT listo (ciclo {attempt}, espera máxima total {int(total_seconds)}s)."
+            )
+            return composer
+        except ChatGPTUsageLimitError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            diag = await chatgpt_page_diagnostics(page)
+            session._note(
+                f"ChatGPT aún no está listo tras {int(current_slice)}s "
+                f"(ciclo {attempt}): {diag}"
+            )
+
+            if loop.time() >= deadline:
+                break
+
+            # Give login/challenge screens time to settle instead of hammering reload.
+            diag_cf = diag.casefold()
+            challenge_markers = (
+                "just a moment", "verify you are human", "verifica que eres humano",
+                "checking your browser", "cloudflare", "inicia sesión", "log in", "sign up",
+            )
+            if any(marker in diag_cf for marker in challenge_markers):
+                await asyncio.sleep(min(15.0, max(1.0, deadline - loop.time())))
+                continue
+
+            try:
+                timeout_ms = int(os.getenv("STECH_CHATGPT_NAV_TIMEOUT_MS", "120000"))
+                await page.reload(wait_until="commit", timeout=min(timeout_ms, 60000))
+                session._note("ChatGPT seguía sin compositor; página recargada automáticamente.")
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
+            except Exception:
+                try:
+                    await navigate_chatgpt(page, attempts=1)
+                except Exception:
+                    session.page = None
+
+            await asyncio.sleep(min(3.0, max(0.5, deadline - loop.time())))
+
+    page = await recover_chatgpt_page(session)
+    diag = await chatgpt_page_diagnostics(page)
+    raise RuntimeError(
+        "CHATGPT_READY_TIMEOUT: el compositor no estuvo disponible dentro de "
+        f"{int(total_seconds)}s; último_error={type(last_error).__name__}: {last_error}; {diag}"
+    )
+
+
 async def guard_unsent_prompt(session, expected_prompt: str, delay_seconds: float = 2.5) -> None:
     """Click Send only when the complete prompt is still sitting unsent in the composer."""
     try:
         await asyncio.sleep(max(0.5, float(delay_seconds)))
         page = await recover_chatgpt_page(session)
         await raise_if_chatgpt_usage_limited(page)
-        await prepare_chatgpt_composer(page, timeout_seconds=5.0)
+        await prepare_chatgpt_composer(page, timeout_seconds=10.0)
         composer = page.locator("#prompt-textarea")
         if await composer.count() < 1:
             return
@@ -319,7 +412,7 @@ async def ask_in_job_chat_retry(
         try:
             page = await router.prepare(chat_key, session, open_fresh_chat, recover_chatgpt_page)
             await raise_if_chatgpt_usage_limited(page)
-            await prepare_chatgpt_composer(page)
+            await wait_for_chatgpt_ready(session)
             await raise_if_chatgpt_usage_limited(page)
             session._note("Compositor real de ChatGPT estable y listo.")
             baseline_count = await assistant_message_count(session)
