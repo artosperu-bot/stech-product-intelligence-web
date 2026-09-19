@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 REMOTE_CONTEXT_KWARG = "__stech_remote_context__"
 REAL_COMPOSER_SELECTOR = "#prompt-textarea"
@@ -58,7 +59,7 @@ def _rect_stable(previous, current, tolerance: float = 0.75) -> bool:
 
 async def prepare_chatgpt_composer(
     page,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float | None = None,
     poll_seconds: float = 0.2,
     stable_checks: int = 3,
 ):
@@ -72,6 +73,8 @@ async def prepare_chatgpt_composer(
     consecutive samples. Fallback textareas are removed from the accessibility tree.
     """
     loop = asyncio.get_running_loop()
+    if timeout_seconds is None:
+        timeout_seconds = float(os.getenv("STECH_CHATGPT_COMPOSER_TIMEOUT_SECONDS", "180"))
     deadline = loop.time() + max(0.1, float(timeout_seconds))
     poll = max(0.01, float(poll_seconds))
     required_stable = max(1, int(stable_checks))
@@ -242,7 +245,12 @@ class WorkerChatRouter:
         if known_url:
             page = await recover(session)
             if (getattr(page, "url", "") or "") != known_url:
-                await page.goto(known_url, wait_until="domcontentloaded", timeout=60000)
+                timeout_ms = int(os.getenv("STECH_CHATGPT_NAV_TIMEOUT_MS", "120000"))
+                await page.goto(known_url, wait_until="commit", timeout=timeout_ms)
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
             session.page = page
             self._active_key = key
             return page
