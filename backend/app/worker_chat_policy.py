@@ -57,6 +57,133 @@ def _rect_stable(previous, current, tolerance: float = 0.75) -> bool:
         return False
 
 
+async def ensure_chatgpt_composer_alias(page) -> dict:
+    """Expose the current visible ChatGPT composer through the legacy #prompt-textarea id.
+
+    ChatGPT changes the editor DOM periodically. The V30 browser core still expects
+    #prompt-textarea, so the Windows worker installs a tiny compatibility shim that
+    locates the best visible editable candidate and aliases it with that id. A
+    MutationObserver reapplies the alias when React replaces the composer node.
+    """
+    try:
+        result = await page.evaluate(
+            r"""() => {
+              const isVisibleEditable = (el) => {
+                if (!el || !el.isConnected) return false;
+                const rect = el.getBoundingClientRect();
+                const style = getComputedStyle(el);
+                if (rect.width < 80 || rect.height < 18) return false;
+                if (style.display === 'none' || style.visibility === 'hidden') return false;
+                if (el.getAttribute('aria-hidden') === 'true') return false;
+                if (el.matches('textarea, input')) {
+                  return !el.disabled && !el.readOnly;
+                }
+                return el.getAttribute('contenteditable') === 'true';
+              };
+
+              const score = (el) => {
+                const rect = el.getBoundingClientRect();
+                const vh = Math.max(window.innerHeight || 0, 1);
+                const vw = Math.max(window.innerWidth || 0, 1);
+                const attrs = [
+                  el.id,
+                  el.getAttribute('role'),
+                  el.getAttribute('aria-label'),
+                  el.getAttribute('placeholder'),
+                  el.getAttribute('data-placeholder'),
+                  el.getAttribute('name'),
+                  el.className,
+                ].filter(Boolean).join(' ').toLowerCase();
+
+                let points = 0;
+                if (el.id === 'prompt-textarea') points += 1000;
+                if (el.getAttribute('contenteditable') === 'true') points += 260;
+                if (el.getAttribute('role') === 'textbox') points += 180;
+                if (/message|mensaje|chatgpt|prompt|ask|pregunta|enviar/.test(attrs)) points += 260;
+                if (el.closest('form')) points += 100;
+                if (rect.width > 250) points += 80;
+                if (rect.width > vw * 0.35) points += 60;
+                if (rect.top > vh * 0.40) points += 120;
+                if (rect.bottom > vh * 0.62) points += 100;
+                if (el.matches('textarea')) points += 40;
+                if (/search|buscar/.test(attrs)) points -= 500;
+                if (el.closest('aside, nav, [role="navigation"]')) points -= 350;
+                return points;
+              };
+
+              const findBest = () => {
+                const selectors = [
+                  '#prompt-textarea',
+                  '[contenteditable="true"][role="textbox"]',
+                  '[contenteditable="true"][data-placeholder]',
+                  '.ProseMirror[contenteditable="true"]',
+                  'div[contenteditable="true"]',
+                  'textarea[name="prompt-textarea"]',
+                  'textarea[placeholder]',
+                  'textarea'
+                ];
+                const seen = new Set();
+                const candidates = [];
+                for (const selector of selectors) {
+                  for (const el of document.querySelectorAll(selector)) {
+                    if (seen.has(el)) continue;
+                    seen.add(el);
+                    if (isVisibleEditable(el)) candidates.push(el);
+                  }
+                }
+                candidates.sort((a, b) => score(b) - score(a));
+                return candidates[0] || null;
+              };
+
+              const alias = () => {
+                const best = findBest();
+                if (!best) {
+                  return {ok:false, candidates:0};
+                }
+
+                for (const old of document.querySelectorAll('#prompt-textarea')) {
+                  if (old !== best) old.removeAttribute('id');
+                }
+                best.id = 'prompt-textarea';
+                if (!best.getAttribute('role')) best.setAttribute('role', 'textbox');
+                best.setAttribute('data-stech-composer-active', '1');
+
+                const rect = best.getBoundingClientRect();
+                return {
+                  ok: true,
+                  tag: best.tagName,
+                  role: best.getAttribute('role') || '',
+                  contenteditable: best.getAttribute('contenteditable') || '',
+                  placeholder: best.getAttribute('placeholder') || best.getAttribute('data-placeholder') || '',
+                  rect: [rect.x, rect.y, rect.width, rect.height],
+                  score: score(best),
+                };
+              };
+
+              window.__stechEnsureComposer = alias;
+              if (!window.__stechComposerObserver) {
+                let queued = false;
+                window.__stechComposerObserver = new MutationObserver(() => {
+                  if (queued) return;
+                  queued = true;
+                  queueMicrotask(() => {
+                    queued = false;
+                    try { alias(); } catch (_) {}
+                  });
+                });
+                window.__stechComposerObserver.observe(document.documentElement, {
+                  childList: true,
+                  subtree: true,
+                });
+              }
+              return alias();
+            }"""
+        )
+        return result if isinstance(result, dict) else {}
+    except Exception:
+        return {}
+
+
 async def prepare_chatgpt_composer(
     page,
     timeout_seconds: float | None = None,
@@ -83,10 +210,12 @@ async def prepare_chatgpt_composer(
 
     while loop.time() < deadline:
         try:
+            compat = await ensure_chatgpt_composer_alias(page)
             real_locators = page.locator(REAL_COMPOSER_SELECTOR)
             real_count = await real_locators.count()
             if real_count < 1:
-                last_error = "#prompt-textarea no existe todavía"
+                detail = f"; compat={compat}" if compat else ""
+                last_error = f"compositor visible no localizado todavía{detail}"
                 await asyncio.sleep(poll)
                 continue
 
